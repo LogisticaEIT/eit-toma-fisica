@@ -1,7 +1,7 @@
 # ==============================================================================
-# MÓDULO DE CUSTODIOS & TOMA FÍSICA: TomaFisicaApp.py (Versión Master Definitiva Cloud)
+# MÓDULO DE CUSTODIOS & TOMA FÍSICA: TomaFisicaApp.py (Versión Master Definitiva)
 # ==============================================================================
-# COMANDO DE EJECUCIÓN EN CMD (WINDOWS 7 / PYTHON 3.8 / LOCAL):
+# COMANDO DE EJECUCIÓN EN CMD (WINDOWS 7 / PYTHON 3.8):
 # cd /d "D:\Bases\ADM LOG"
 # python -m streamlit run TomaFisicaApp.py --server.address 192.168.100.47 --server.port 8501 --server.fileWatcherType none --server.enableCORS false --server.enableXsrfProtection false
 # ==============================================================================
@@ -75,8 +75,6 @@ pivot_path = r"D:\Bases\MICRO\PRODUCTO - PIVOT.xlsm"
 nac_path = r"D:\Bases\MICRO\NAC.xlsx"
 json_local_path = r"D:\Bases\ADM LOG\toma_fisica_registros.json"
 WEB_APP_URL = "https://script.google.com/macros/s/AKfycbxGk8xG7zUy0vu-OUXwgg_qlUS8lmNlU1bh_CygmJkpieTt2jdfOkknoUjAKKis7EiA5g/exec"
-
-URL_STREAMLIT_CLOUD_OFICIAL = "https://eit-toma-fisica.streamlit.app"
 
 BODEGAS_OFICIALES = ["01", "03", "04", "05", "3V", "5V"]
 MAPEO_COLUMNAS_FIJO = {"01": 5, "03": 6, "04": 7, "05": 8, "3V": 9, "5V": 10}
@@ -191,10 +189,10 @@ es_superusuario = (
 
 if es_superusuario:
     bodegas_permitidas = BODEGAS_OFICIALES
-    st.sidebar.success("🔑 Perfil detectado: **Superusuario / Administrador**")
+    st.sidebar.success("🔑 Perfil: **Superusuario / Admin**")
 else:
-    bodegas_permitidas = ASIGNACION_BODEGAS_CUSTODIOS.get(usuario_activo, ["01", "03"])
-    st.sidebar.info(f"👤 Perfil detectado: **Custodio Operativo** (Bodegas: {', '.join(bodegas_permitidas)})")
+    bodegas_permitidas = ASIGNACION_BODEGAS_CUSTODIOS.get(usuario_activo, ["01"])
+    st.sidebar.info(f"👤 Perfil: **Custodio** (Bodegas: {', '.join(bodegas_permitidas)})")
 
 st.sidebar.markdown("---")
 st.sidebar.markdown("### ⚙️ Tipo de Proceso Operativo")
@@ -206,13 +204,15 @@ tipo_proceso = st.sidebar.radio(
 st.sidebar.markdown("---")
 st.sidebar.markdown("### 🏭 Selección de Bodega Objetivo")
 
-if "select_bodega_sidebar" not in st.session_state or st.session_state["select_bodega_sidebar"] not in bodegas_permitidas:
-    st.session_state["select_bodega_sidebar"] = bodegas_permitidas[0]
+if "bodega_activa_state" not in st.session_state or st.session_state["bodega_activa_state"] not in bodegas_permitidas:
+    st.session_state["bodega_activa_state"] = bodegas_permitidas[0]
 
-bodega_sel = st.sidebar.selectbox(
-    "Bodega a Auditar:",
+# Cambio a st.radio para blindar la selección y evitar que se regrese sola
+bodega_sel = st.sidebar.radio(
+    "Seleccione la Bodega a Auditar:",
     bodegas_permitidas,
-    key="select_bodega_sidebar",
+    index=bodegas_permitidas.index(st.session_state["bodega_activa_state"]) if st.session_state["bodega_activa_state"] in bodegas_permitidas else 0,
+    key="bodega_activa_state"
 )
 bodega_norm = normalizar_bodega(bodega_sel)
 
@@ -225,8 +225,8 @@ if es_superusuario:
         value=st.session_state["periodo_abierto"],
     )
 else:
-    st.session_state["periodo_abierto"] = True
-    st.sidebar.info("🔒 Periodo operando bajo restricciones de custodio")
+    st.session_state["periodo_abierto"] = False
+    st.sidebar.info("🔒 Periodo controlado por el Administrador")
 
 st.sidebar.markdown("---")
 st.sidebar.markdown("### 📅 Rango de Fechas de Auditoría")
@@ -240,7 +240,7 @@ st.sidebar.markdown("---")
 st.sidebar.markdown("### 📱 Compartir por WhatsApp (Acceso Remoto)")
 url_ingresada = st.sidebar.text_input(
     "URL de Acceso para Custodios:",
-    value=URL_STREAMLIT_CLOUD_OFICIAL,
+    value="https://docs.google.com/spreadsheets/d/18wP5AIAaJU1zSMu5GSza7wOmMyZwpYWd1CxlFwBeW5M/edit?usp=sharing",
     key="url_whatsapp_input"
 )
 if url_ingresada:
@@ -655,7 +655,7 @@ with tab_op:
 with tab_dash:
     try:
         st.markdown("## 📊 Dashboard Estadístico & Nivel de Avance con Filtros")
-        st.markdown("Monitoreo gerencial en tiempo real con filtros avanzados.")
+        st.markdown("Monitoreo gerencial en tiempo real con desglose por bodegas y estados.")
         st.markdown('<div class="card-section">', unsafe_allow_html=True)
         
         if datos_locales_json:
@@ -681,11 +681,18 @@ with tab_dash:
                 df_filtrado = df_filtrado[df_filtrado["Correo_Usuario"] == filtro_usu]
             
             st.markdown("---")
-            total_reg_filtrados = len(df_filtrado)
-            st.metric("Total Transacciones según Filtros", total_reg_filtrados)
+            
+            m1, m2 = st.columns(2)
+            m1.metric("Total Transacciones Filtradas", len(df_filtrado))
+            m2.metric("Bodegas Activas con Registros", df_filtrado["Bodega"].nunique() if not df_filtrado.empty else 0)
             
             if not df_filtrado.empty:
-                st.markdown("### 📈 Desglose por Estado de Diferencias")
+                st.markdown("### 🏢 Avance de Registros por Bodega")
+                conteo_bodegas = df_filtrado["Bodega"].value_counts().reset_index()
+                conteo_bodegas.columns = ["BODEGA", "CANTIDAD DE REGISTROS"]
+                st.dataframe(conteo_bodegas, use_container_width=True)
+                
+                st.markdown("### 📈 Desglose por Estado de Diferencias (SOB / FAL / OK)")
                 conteo_estados = df_filtrado["ESTADO"].value_counts().reset_index()
                 if len(conteo_estados.columns) == 2:
                     conteo_estados.columns = ["ESTADO", "CANTIDAD"]
@@ -731,23 +738,4 @@ with tab_exp:
                 df_export_filtered = df_export_filtered[df_export_filtered["Correo_Usuario"] == sel_exp_usu]
             
             st.markdown("---")
-            st.dataframe(df_export_filtered, use_container_width=True)
-            
-            output_buffer = io.BytesIO()
-            with pd.ExcelWriter(output_buffer, engine="openpyxl") as writer:
-                df_export_filtered.to_excel(writer, index=False, sheet_name="Capturas_Locales")
-            excel_data = output_buffer.getvalue()
-            
-            st.download_button(
-                label="📥 Descargar Excel Filtrado",
-                data=excel_data,
-                file_name=f"TomaFisica_Export_{datetime.now().strftime('%Y%m%d_%H%M%S')}.xlsx",
-                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                use_container_width=True,
-            )
-        else:
-            st.info("Aún no hay registros guardados localmente para exportar.")
-
-        st.markdown('</div>', unsafe_allow_html=True)
-    except Exception as e:
-        st.error(f"⚠️ Error en la exportación: {e}")
+            st.dataframe(df_export_filtered, use_container
