@@ -1,5 +1,5 @@
 # ==============================================================================
-# MÓDULO DE CUSTODIOS & TOMA FÍSICA: TomaFisicaApp.py (Versión Íntegra Definitiva)
+# MÓDULO DE CUSTODIOS & TOMA FÍSICA: TomaFisicaApp.py (Versión Íntegra Sin Expansor)
 # ==============================================================================
 # COMANDO DE EJECUCIÓN EN CMD (WINDOWS 7 / PYTHON 3.8):
 # cd /d "D:\Bases\ADM LOG"
@@ -372,30 +372,28 @@ with tab_op:
     pendientes_n = len([s for s in skus_maestros_bodega if s not in skus_ya_auditados])
     auditados_n = len([s for s in skus_maestros_bodega if s in skus_ya_auditados])
 
-    titulo_expansor = f"🚦 Guía de Estado de SKUs en Bodega {bodega_norm} ({tipo_proceso}) | Pendientes: {pendientes_n} / Total: {len(skus_maestros_bodega)}"
+    # GUÍA DE ESTADO DINÁMICA PURA (SIN EXPANSOR)
+    st.markdown(f"### 🚦 Guía de Estado de SKUs en Bodega {bodega_norm} ({tipo_proceso})")
+    st.markdown(f"🟢 **Pendientes:** [{pendientes_n}] | 🔴 **Contados:** [{auditados_n}] | **Total:** [{len(skus_maestros_bodega)}]")
 
-    with st.expander(titulo_expansor):
+    if skus_maestros_bodega:
+        html_rows = ""
+        for s in skus_maestros_bodega[:100]:
+            contado = s in skus_ya_auditados
+            est_txt = "CONTADO" if contado else "PENDIENTE"
+            bg_c = "#FEE2E2" if contado else "#DCFCE7"
+            tx_c = "#991B1B" if contado else "#166534"
+            desc_s = mapa_sku_desc.get(s, "")
+            html_rows += f"<tr style='background-color:{bg_c}; color:{tx_c};'><td style='padding:6px; font-weight:bold;'>{est_txt}</td><td style='padding:6px; font-weight:bold;'>{s}</td><td style='padding:6px;'>{desc_s}</td></tr>"
+        
         st.markdown(
-            f"🟢 **Pendientes:** [{pendientes_n}] | 🔴 **Contados:** [{auditados_n}]"
+            f"<div style='max-height:250px; overflow-y:auto;'><table style='width:100%; border-collapse:collapse;'>"
+            f"<tr style='background-color:#1E293B; color:white;'><th style='padding:6px; text-align:left;'>Estado</th><th style='padding:6px; text-align:left;'>SKU</th><th style='padding:6px; text-align:left;'>Descripción</th></tr>"
+            f"{html_rows}</table></div>",
+            unsafe_allow_html=True
         )
-        if skus_maestros_bodega:
-            html_rows = ""
-            for s in skus_maestros_bodega[:100]:
-                contado = s in skus_ya_auditados
-                est_txt = "CONTADO" if contado else "PENDIENTE"
-                bg_c = "#FEE2E2" if contado else "#DCFCE7"
-                tx_c = "#991B1B" if contado else "#166534"
-                desc_s = mapa_sku_desc.get(s, "")
-                html_rows += f"<tr style='background-color:{bg_c}; color:{tx_c};'><td style='padding:6px; font-weight:bold;'>{est_txt}</td><td style='padding:6px; font-weight:bold;'>{s}</td><td style='padding:6px;'>{desc_s}</td></tr>"
-            
-            st.markdown(
-                f"<div style='max-height:250px; overflow-y:auto;'><table style='width:100%; border-collapse:collapse;'>"
-                f"<tr style='background-color:#1E293B; color:white;'><th style='padding:6px; text-align:left;'>Estado</th><th style='padding:6px; text-align:left;'>SKU</th><th style='padding:6px; text-align:left;'>Descripción</th></tr>"
-                f"{html_rows}</table></div>",
-                unsafe_allow_html=True
-            )
-        else:
-            st.info(f"ℹ️ No hay SKUs teóricos registrados para la Bodega {bodega_norm} bajo este criterio.")
+    else:
+        st.info(f"ℹ️ No hay SKUs teóricos registrados para la Bodega {bodega_norm} bajo este criterio.")
 
     opciones_sku_combo = ["-- SELECCIONE O ESCANEE SKU --"]
     for s in skus_maestros_bodega:
