@@ -1,11 +1,10 @@
 # ==============================================================================
-# MÓDULO DE CUSTODIOS & TOMA FÍSICA: TomaFisicaApp.py (Versión Master Definitiva)
+# MÓDULO DE CUSTODIOS & TOMA FÍSICA: TomaFisicaApp.py (Versión Íntegra Definitiva)
 # ==============================================================================
 # COMANDO DE EJECUCIÓN EN CMD (WINDOWS 7 / PYTHON 3.8):
 # cd /d "D:\Bases\ADM LOG"
 # python -m streamlit run TomaFisicaApp.py --server.address 192.168.100.47 --server.port 8501 --server.fileWatcherType none --server.enableCORS false --server.enableXsrfProtection false
 # ==============================================================================
-
 
 import os
 import re
@@ -77,6 +76,7 @@ json_local_path = r"D:\Bases\ADM LOG\toma_fisica_registros.json"
 WEB_APP_URL = "https://script.google.com/macros/s/AKfycbxGk8xG7zUy0vu-OUXwgg_qlUS8lmNlU1bh_CygmJkpieTt2jdfOkknoUjAKKis7EiA5g/exec"
 
 BODEGAS_OFICIALES = ["01", "03", "04", "05", "3V", "5V"]
+
 MAPEO_COLUMNAS_FIJO = {"01": 5, "03": 6, "04": 7, "05": 8, "3V": 9, "5V": 10}
 IDX_COL_TOTAL_NACIONAL = 11
 IDX_COL_MOV_V = 21
@@ -134,9 +134,8 @@ datos_locales_json = cargar_registros_json()
 
 
 @st.cache_data(show_spinner=False)
-def cargar_maestros_optimizado(p_path, n_path):
+def cargar_maestro_pivot(p_path):
     dict_m = {}
-    nac_rows = []
     try:
         if os.path.exists(p_path):
             wb = openpyxl.load_workbook(p_path, data_only=True)
@@ -161,7 +160,12 @@ def cargar_maestros_optimizado(p_path, n_path):
                                             dict_m[s_val][headers[i]] = v_str
     except Exception:
         pass
+    return dict_m
 
+
+@st.cache_data(show_spinner=False)
+def cargar_nac_fresco(n_path):
+    nac_rows = []
     try:
         if os.path.exists(n_path):
             wb_nac = openpyxl.load_workbook(n_path, data_only=True)
@@ -169,11 +173,11 @@ def cargar_maestros_optimizado(p_path, n_path):
             nac_rows = list(ws_nac.iter_rows(values_only=True))
     except Exception:
         pass
-        
-    return dict_m, nac_rows
+    return nac_rows
 
 
-dict_maestro_global, nac_rows = cargar_maestros_optimizado(pivot_path, nac_path)
+dict_maestro_global = cargar_maestro_pivot(pivot_path)
+nac_rows = cargar_nac_fresco(nac_path)
 
 st.sidebar.markdown("### 🔐 Panel de Control Maestro")
 usuario_activo = st.sidebar.text_input(
@@ -198,7 +202,7 @@ st.sidebar.markdown("---")
 st.sidebar.markdown("### ⚙️ Tipo de Proceso Operativo")
 tipo_proceso = st.sidebar.radio(
     "Seleccione el modo de operación:",
-    ["Toma Física Completa", "Control Mensual de Inventario (Muestreo)"],
+    ["Control Mensual de Inventario (Muestreo)", "Toma Física Completa"],
 )
 
 st.sidebar.markdown("---")
@@ -207,13 +211,19 @@ st.sidebar.markdown("### 🏭 Selección de Bodega Objetivo")
 if "bodega_activa_state" not in st.session_state or st.session_state["bodega_activa_state"] not in bodegas_permitidas:
     st.session_state["bodega_activa_state"] = bodegas_permitidas[0]
 
-bodega_sel = st.sidebar.radio(
+def limpiar_estado_al_cambiar_bodega():
+    for k_del in ["input_sku", "select_sku_dropdown", "input_q"]:
+        if k_del in st.session_state:
+            del st.session_state[k_del]
+
+st.sidebar.radio(
     "Seleccione la Bodega a Auditar:",
     bodegas_permitidas,
-    index=bodegas_permitidas.index(st.session_state["bodega_activa_state"]) if st.session_state["bodega_activa_state"] in bodegas_permitidas else 0,
-    key="bodega_activa_state"
+    key="bodega_activa_state",
+    on_change=limpiar_estado_al_cambiar_bodega
 )
-bodega_norm = normalizar_bodega(bodega_sel)
+
+bodega_norm = normalizar_bodega(st.session_state.get("bodega_activa_state", bodegas_permitidas[0]))
 
 if "periodo_abierto" not in st.session_state:
     st.session_state["periodo_abierto"] = False
@@ -310,14 +320,8 @@ with tab_op:
             "Ubicación Física:", value="UBICACIÓN", key="in_ubic"
         ).strip().upper()
 
-    # DETECCIÓN DINÁMICA DE LA COLUMNA DE BODEGA EN NAC.XLSX
-    idx_col_bodega = MAPEO_COLUMNAS_FIJO.get(bodega_norm, None)
-    if nac_rows and len(nac_rows) > 0:
-        headers_nac = [str(c).strip().upper() if c is not None else "" for c in nac_rows[0]]
-        for i, h in enumerate(headers_nac):
-            if normalizar_bodega(h) == bodega_norm:
-                idx_col_bodega = i
-                break
+    idx_col_bodega = MAPEO_COLUMNAS_FIJO.get(bodega_norm, 5)
+    es_modo_muestreo = "Control Mensual" in tipo_proceso or "Muestreo" in tipo_proceso
 
     skus_maestros_bodega = []
     mapa_sku_desc = {}
@@ -331,9 +335,7 @@ with tab_op:
             if per == periodo_auditoria.strip() and bod == bodega_norm and sku_reg:
                 skus_ya_auditados.add(sku_reg)
 
-    es_modo_muestreo = "Control Mensual" in tipo_proceso or "Muestreo" in tipo_proceso
-
-    if nac_rows and len(nac_rows) > 1 and idx_col_bodega is not None:
+    if nac_rows and len(nac_rows) > 1:
         for row in nac_rows[1:]:
             if not row or row[0] is None:
                 continue
@@ -367,18 +369,16 @@ with tab_op:
 
     skus_maestros_bodega = sorted(list(set(skus_maestros_bodega)))
 
-    if skus_maestros_bodega:
-        pendientes_n = len([s for s in skus_maestros_bodega if s not in skus_ya_auditados])
-        auditados_n = len([s for s in skus_maestros_bodega if s in skus_ya_auditados])
+    pendientes_n = len([s for s in skus_maestros_bodega if s not in skus_ya_auditados])
+    auditados_n = len([s for s in skus_maestros_bodega if s in skus_ya_auditados])
 
-        with st.expander(
-            f"🚦 Guía de Estado de SKUs en Bodega {bodega_norm}"
-            f" ({tipo_proceso}) | Pendientes: {pendientes_n} / Total:"
-            f" {len(skus_maestros_bodega)}"
-        ):
-            st.markdown(
-                f"🟢 **Pendientes:** [{pendientes_n}] | 🔴 **Contados:** [{auditados_n}]"
-            )
+    titulo_expansor = f"🚦 Guía de Estado de SKUs en Bodega {bodega_norm} ({tipo_proceso}) | Pendientes: {pendientes_n} / Total: {len(skus_maestros_bodega)}"
+
+    with st.expander(titulo_expansor):
+        st.markdown(
+            f"🟢 **Pendientes:** [{pendientes_n}] | 🔴 **Contados:** [{auditados_n}]"
+        )
+        if skus_maestros_bodega:
             html_rows = ""
             for s in skus_maestros_bodega[:100]:
                 contado = s in skus_ya_auditados
@@ -394,8 +394,8 @@ with tab_op:
                 f"{html_rows}</table></div>",
                 unsafe_allow_html=True
             )
-    else:
-        st.info(f"ℹ️ No hay SKUs teóricos registrados para la Bodega {bodega_norm} bajo el criterio de {tipo_proceso}.")
+        else:
+            st.info(f"ℹ️ No hay SKUs teóricos registrados para la Bodega {bodega_norm} bajo este criterio.")
 
     opciones_sku_combo = ["-- SELECCIONE O ESCANEE SKU --"]
     for s in skus_maestros_bodega:
@@ -484,7 +484,7 @@ with tab_op:
         if nac_rows and len(nac_rows) > 1:
             for row in nac_rows[1:]:
                 if row and row[0] is not None and str(row[0]).strip().upper() == cod_sku:
-                    if idx_col_bodega is not None and idx_col_bodega < len(row):
+                    if idx_col_bodega < len(row):
                         try:
                             st_teorico = float(row[idx_col_bodega]) if row[idx_col_bodega] is not None else 0.0
                         except:
