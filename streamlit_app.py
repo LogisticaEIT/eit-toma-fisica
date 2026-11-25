@@ -11,6 +11,7 @@ import os
 import json
 import io
 import html
+import shutil
 import urllib.parse
 import urllib3
 from datetime import date, datetime
@@ -299,6 +300,22 @@ def guardar_json(reg):
         return False
 
 
+def respaldar_y_limpiar_pruebas():
+    carpeta_respaldo = os.path.join(os.path.dirname(json_path), "Respaldos_Pruebas")
+    os.makedirs(carpeta_respaldo, exist_ok=True)
+    stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    for arch in [json_path, enviados_path]:
+        if os.path.exists(arch):
+            destino = os.path.join(carpeta_respaldo, f"{os.path.splitext(os.path.basename(arch))[0]}_{stamp}.json")
+            shutil.copy2(arch, destino)
+    with open(json_path, "w", encoding="utf-8") as f:
+        json.dump([], f, indent=2, ensure_ascii=False)
+    with open(enviados_path, "w", encoding="utf-8") as f:
+        json.dump([], f, indent=2, ensure_ascii=False)
+    leer_gs.clear()
+    return carpeta_respaldo
+
+
 def ids_enviados():
     if os.path.exists(enviados_path):
         try:
@@ -536,9 +553,10 @@ def construir_metricas_avance(df, nac_rows, muestreo=True):
     return filas
 
 
-def construir_resumen_bodega(df, nac_rows, muestreo=True):
+def construir_resumen_bodega(df, nac_rows, muestreo=True, bodega_filtro="TODAS"):
+    bodegas_iter = [norm_bod(bodega_filtro)] if bodega_filtro != "TODAS" else BODEGAS_OFICIALES
     filas = []
-    for bod_k in BODEGAS_OFICIALES:
+    for bod_k in bodegas_iter:
         grp = df[df["Bodega"] == bod_k] if not df.empty else pd.DataFrame(columns=COLS_REP)
         teo_skus = contar_teoricos_bodega(nac_rows, bod_k, muestreo=muestreo)
         cont_skus = int(grp["COD_SKU"].nunique()) if not grp.empty else 0
@@ -607,7 +625,6 @@ def render_lista_visual(df_plot, label_col, val_cols, titulo=""):
 
 
 def render_tabla_segura(df_in, cols, max_filas=50, key_suf="tbl"):
-    """Renderiza tabla HTML sin usar st.dataframe/pyarrow para evitar errores de DLL en Python 3.8."""
     if df_in is None or df_in.empty:
         st.info("No hay registros disponibles con los filtros actuales.")
         return
@@ -789,9 +806,10 @@ f_ini = st.sidebar.date_input("Desde:", value=date.today(), key="f_ini_in")
 f_fin = st.sidebar.date_input("Hasta:", value=date.today(), key="f_fin_in")
 periodo_act = f"{f_ini.strftime('%Y-%m-%d')} al {f_fin.strftime('%Y-%m-%d')}"
 
-url_wa = st.sidebar.text_input("URL Custodios:", value="https://eit-toma-fisica-4wrzxgv3pgzfdr8agv9mtm.streamlit.app/", key="url_wa_in").strip()
-if url_wa:
-    msg_wa = f"CONTROL DE INVENTARIO EIT\n\nEnlace para registro de tomas físicas:\n{url_wa.splitlines()[0].strip()}"
+url_wa_raw = st.sidebar.text_input("URL Custodios:", value="https://eit-toma-fisica-4wrzxgv3pgzfdr8agv9mtm.streamlit.app/", key="url_wa_in")
+url_wa_limpia = "".join(str(url_wa_raw or "").split()).strip()
+if url_wa_limpia:
+    msg_wa = f"CONTROL DE INVENTARIO EIT\n\nEnlace para registro de tomas físicas:\n{url_wa_limpia}"
     st.sidebar.markdown(
         f'<a href="https://api.whatsapp.com/send?text={urllib.parse.quote(msg_wa)}" target="_blank" style="display:block;text-align:center;padding:8px;background:#16A34A;color:#FFF!important;font-weight:700;border-radius:6px;text-decoration:none;">Enviar por WhatsApp</a>',
         unsafe_allow_html=True,
@@ -825,13 +843,13 @@ if st.sidebar.button("Refrescar estadísticas", use_container_width=True, key="b
 df_rep = df_base_rep.copy()
 if not df_rep.empty:
     if f_per != "TODOS":
-        df_rep = df_rep[df_rep["Periodo"] == f_per]
+        df_rep = df_rep[df_rep["Periodo"] == str(f_per).strip()]
     if f_bod != "TODAS":
-        df_rep = df_rep[df_rep["Bodega"] == f_bod]
+        df_rep = df_rep[df_rep["Bodega"] == norm_bod(f_bod)]
     if f_ciu != "TODAS":
-        df_rep = df_rep[df_rep["Ciudad"] == f_ciu]
+        df_rep = df_rep[df_rep["Ciudad"] == str(f_ciu).strip().upper()]
     if f_cus != "TODOS":
-        df_rep = df_rep[df_rep["Correo_Usuario"] == f_cus]
+        df_rep = df_rep[df_rep["Correo_Usuario"] == str(f_cus).strip().lower()]
     if f_sku:
         df_rep = df_rep[df_rep["COD_SKU"].str.contains(f_sku, na=False, regex=False)]
     if f_prv:
@@ -841,7 +859,7 @@ if es_admin:
     st.sidebar.markdown("---")
     st.sidebar.markdown("### Métricas & Sync (Superusuario)")
     if not df_rep.empty:
-        bod_m = bod_norm if f_bod == "TODAS" else f_bod
+        bod_m = bod_norm if f_bod == "TODAS" else norm_bod(f_bod)
         teo_b = contar_teoricos_bodega(nac_rows, bod_m, muestreo=muestreo_rep)
         cont_b = int(df_rep[df_rep["Bodega"] == bod_m]["COD_SKU"].nunique())
         pend_b = max(teo_b - cont_b, 0) if teo_b > 0 else 0
@@ -883,6 +901,14 @@ if es_admin:
             st.sidebar.success(f"Dups:{dups} | OK:{cnt_ok} | Omit:{cnt_om} | Dup:{cnt_dup} | Sobr:{cnt_ov}")
         else:
             st.sidebar.info("Sin registros locales.")
+
+    with st.sidebar.expander("Limpieza de Pruebas (Pre-Campo)"):
+        confirmar_limpieza = st.checkbox("Respaldar y limpiar JSON de pruebas", value=False, key="chk_limp_pruebas")
+        if st.button("Limpiar registros de prueba", use_container_width=True, disabled=not confirmar_limpieza, key="btn_limp_pruebas"):
+            carp = respaldar_y_limpiar_pruebas()
+            st.session_state["cap_v"] += 1
+            st.success(f"Respaldo creado en: {carp}. Registros locales limpiados.")
+            st.rerun()
 
 pend_logs_cnt = sum(1 for lg in logs_json if str(lg.get("Enviado_GS", "NO")).upper() != "SI")
 st.sidebar.markdown("---")
@@ -1085,7 +1111,7 @@ with tab_dash:
         st.markdown("---")
         g1, g2 = st.columns(2)
         with g1:
-            df_bod_av = construir_resumen_bodega(df_rep, nac_rows, muestreo=muestreo_rep)
+            df_bod_av = construir_resumen_bodega(df_rep, nac_rows, muestreo=muestreo_rep, bodega_filtro=f_bod)
             render_lista_visual(
                 df_bod_av,
                 "Bodega",
