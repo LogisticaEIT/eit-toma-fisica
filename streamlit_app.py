@@ -73,7 +73,7 @@ st.markdown(
 
 RUTA_SCRIPT = os.path.abspath(__file__)
 BASE_DIR = os.path.dirname(RUTA_SCRIPT)
-st.session_state.setdefault("errores_ui", [])
+st.session_state["errores_ui"] = []
 st.session_state.setdefault("cap_v", 0)
 
 
@@ -489,26 +489,103 @@ def construir_resumen_bodega(df, nac_rows, muestreo=True):
     return pd.DataFrame(filas)
 
 
-def grafico_seguro_barras(df_plot, label_col, val_cols, titulo=""):
-    """Intenta st.bar_chart; si falla rpds/altair en Win7/Py3.8, dibuja barras limpias sin romper."""
+def render_lista_visual(df_plot, label_col, val_cols, titulo="", mostrar_secundarios=True):
+    """
+    Renderiza tarjetas con negrilla, formato legible y barra de progreso sin usar
+    st.bar_chart ni st.dataframe (evita fallos de DLL de rpds/altair/pyarrow en Win7 + Py3.8).
+    """
     if titulo:
-        st.markdown(f"**{titulo}**")
+        st.markdown(f"#### {titulo}")
     if df_plot is None or df_plot.empty:
-        st.info("Sin datos para graficar con los filtros actuales.")
+        st.info("Sin datos para mostrar con los filtros actuales.")
         return
-    try:
-        st.bar_chart(df_plot.set_index(label_col)[val_cols], use_container_width=True)
-    except (ImportError, OSError) as e_dll:
-        log_err(f"Chart fallback ({e_dll.__class__.__name__})")
-        col_main = val_cols[0]
-        max_val = max(float(df_plot[col_main].max()), 1.0)
-        for _, r in df_plot.iterrows():
-            etq = str(r[label_col])
-            v_num = float(r[col_main])
-            ratio = min(max(abs(v_num) / max_val, 0.0), 1.0)
-            st.caption(f"{etq}: {v_num:,.2f}")
-            st.progress(ratio)
-        st.dataframe(df_plot[[label_col] + val_cols], use_container_width=True, hide_index=True)
+
+    col_main = val_cols[0]
+    max_val = max((abs(float(v)) for v in df_plot[col_main]), default=1.0)
+    if max_val <= 0:
+        max_val = 1.0
+
+    for _, r in df_plot.iterrows():
+        etq = str(r.get(label_col, "")).strip() or "SIN DATO"
+        v_main = float(r.get(col_main, 0.0) or 0.0)
+        ratio = min(max(abs(v_main) / max_val, 0.0), 1.0)
+
+        if "USD" in col_main.upper() or "COSTO" in col_main.upper():
+            main_fmt = f"${v_main:,.2f}"
+        elif "PCT" in col_main.upper():
+            main_fmt = f"{v_main:,.1f}%"
+        else:
+            main_fmt = f"{v_main:,.0f}" if float(v_main).is_integer() else f"{v_main:,.2f}"
+
+        extras = []
+        if mostrar_secundarios and len(val_cols) > 1:
+            for c_sec in val_cols[1:]:
+                v_sec = float(r.get(c_sec, 0.0) or 0.0)
+                if "USD" in c_sec.upper() or "COSTO" in c_sec.upper():
+                    val_sec_fmt = f"${v_sec:,.2f}"
+                elif "PCT" in c_sec.upper():
+                    val_sec_fmt = f"{v_sec:,.1f}%"
+                else:
+                    val_sec_fmt = f"{v_sec:,.0f}" if float(v_sec).is_integer() else f"{v_sec:,.2f}"
+                extras.append(f"<b>{c_sec}:</b> {val_sec_fmt}")
+
+        extra_txt = " &nbsp;|&nbsp; ".join(extras)
+        st.markdown(
+            f"""
+            <div style="background:#FFFFFF;border:1px solid #CBD5E1;border-left:5px solid #0F172A;border-radius:8px;padding:12px 16px;margin-top:6px;margin-bottom:6px;">
+                <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px;">
+                    <span style="font-size:15px;font-weight:800;color:#0F172A;">{etq}</span>
+                    <span style="font-size:15px;font-weight:900;color:#1D4ED8;"><b>{col_main}:</b> {main_fmt}</span>
+                </div>
+                <div style="font-size:13px;color:#334155;">{extra_txt}</div>
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
+        st.progress(ratio)
+
+
+def render_tabla_html_limpia(df_in, cols, max_filas=50):
+    if df_in is None or df_in.empty:
+        st.info("No hay registros disponibles con los filtros actuales.")
+        return
+    sub = df_in[cols].head(max_filas)
+    ths = "".join(
+        f'<th style="background:#0F172A;color:#FFFFFF!important;padding:9px 10px;text-align:left;font-weight:800;border:1px solid #334155;">{c}</th>'
+        for c in cols
+    )
+    trs = []
+    for _, row in sub.iterrows():
+        tds = []
+        for c in cols:
+            val = row.get(c, "")
+            if isinstance(val, float):
+                if "COSTO" in c.upper() or "USD" in c.upper():
+                    txt = f"${val:,.2f}"
+                elif "PCT" in c.upper():
+                    txt = f"{val:,.1f}%"
+                else:
+                    txt = f"{val:,.0f}" if float(val).is_integer() else f"{val:,.2f}"
+            else:
+                txt = str(val or "")
+            tds.append(
+                f'<td style="padding:8px 10px;border:1px solid #CBD5E1;color:#0F172A!important;font-size:13px;">{txt}</td>'
+            )
+        trs.append(f'<tr style="background:#FFFFFF;">{"".join(tds)}</tr>')
+
+    st.markdown(
+        f"""
+        <div style="overflow-x:auto;border-radius:8px;border:1px solid #CBD5E1;margin-top:8px;margin-bottom:10px;">
+            <table style="width:100%;border-collapse:collapse;">
+                <thead><tr>{ths}</tr></thead>
+                <tbody>{"".join(trs)}</tbody>
+            </table>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+    if len(df_in) > max_filas:
+        st.caption(f"Mostrando las {max_filas} filas más recientes de {len(df_in)} registros filtrados. Descarga el Excel para ver el total completo.")
 
 
 def excel_bytes(df, nac_rows=None, muestreo=True):
@@ -921,7 +998,7 @@ with tab_op:
 with tab_dash:
     st.markdown("### Panorama General de Toma Física & Avance Nacional")
     st.caption(
-        f"Filtros activos -> Fuente GS: `{'SÍ' if incluir_gs_rep else 'NO'}` | Periodo: `{f_per}` | "
+        f"**Filtros activos ->** Fuente GS: `{'SÍ' if incluir_gs_rep else 'NO'}` | Periodo: `{f_per}` | "
         f"Bodega: `{f_bod}` | Ciudad: `{f_ciu}` | Custodio: `{f_cus}` | SKU: `{f_sku or 'TODOS'}` | Prov: `{f_prv or 'TODOS'}`"
     )
 
@@ -939,21 +1016,33 @@ with tab_dash:
         k4.metric("Valor Contado (USD)", f"${df_rep['COSTO TOTAL'].sum():,.2f}")
         k5.metric("Impacto Dif. (USD)", f"${df_rep['COSTO DIF'].sum():,.2f}")
 
-        st.caption(f"Estados en filtro -> SOBRANTE: **{sob_cnt}** | FALTANTE: **{fal_cnt}** | CUADRADO (OK): **{ok_cnt}**")
+        st.markdown(
+            f"**Estados en filtro:** &nbsp; 🟢 **SOBRANTE:** `{sob_cnt}` &nbsp;|&nbsp; 🔴 **FALTANTE:** `{fal_cnt}` &nbsp;|&nbsp; 🟡 **CUADRADO (OK):** `{ok_cnt}`"
+        )
 
         st.markdown("---")
         g1, g2 = st.columns(2)
         with g1:
             df_bod_av = construir_resumen_bodega(df_rep, nac_rows, muestreo=muestreo_rep)
-            grafico_seguro_barras(df_bod_av, "Bodega", ["SKU_Contados", "SKU_Pendientes"], "Avance de SKUs por Bodega (Contados vs Pendientes)")
+            render_lista_visual(
+                df_bod_av,
+                "Bodega",
+                ["SKU_Contados", "SKU_Pendientes", "SKU_Teoricos", "Avance_Pct"],
+                "Avance de SKUs por Bodega (Contados vs Pendientes)",
+            )
 
         with g2:
             df_cus_g = (
                 df_rep.groupby("Correo_Usuario", as_index=False)
-                .agg(Transacciones=("ID_Tx", "count"), Unidades_Q=("Q", "sum"))
+                .agg(Transacciones=("ID_Tx", "count"), Unidades_Q=("Q", "sum"), Costo_Dif_USD=("COSTO DIF", "sum"))
                 .sort_values("Transacciones", ascending=False)
             )
-            grafico_seguro_barras(df_cus_g, "Correo_Usuario", ["Transacciones", "Unidades_Q"], "Actividad por Custodio (Tx y Unidades Q)")
+            render_lista_visual(
+                df_cus_g,
+                "Correo_Usuario",
+                ["Transacciones", "Unidades_Q", "Costo_Dif_USD"],
+                "Actividad por Custodio (Tx y Unidades Q)",
+            )
 
         g3, g4 = st.columns(2)
         with g3:
@@ -962,19 +1051,33 @@ with tab_dash:
                 .agg(Transacciones=("ID_Tx", "count"), Unidades_Q=("Q", "sum"), Costo_Dif_USD=("COSTO DIF", "sum"))
                 .sort_values("Unidades_Q", ascending=False)
             )
-            grafico_seguro_barras(df_ciu_g, "Ciudad", ["Transacciones", "Unidades_Q"], "Distribución por Ciudad (Tx y Unidades Q)")
+            render_lista_visual(
+                df_ciu_g,
+                "Ciudad",
+                ["Transacciones", "Unidades_Q", "Costo_Dif_USD"],
+                "Distribución por Ciudad (Tx y Unidades Q)",
+            )
 
         with g4:
             df_est_g = (
                 df_rep.groupby("ESTADO", as_index=False)
-                .agg(Registros=("ID_Tx", "count"), Costo_Dif_USD=("COSTO DIF", "sum"))
+                .agg(Registros=("ID_Tx", "count"), Unidades_Q=("Q", "sum"), Costo_Dif_USD=("COSTO DIF", "sum"))
             )
-            grafico_seguro_barras(df_est_g, "ESTADO", ["Registros", "Costo_Dif_USD"], "Desglose por Estado (Registros y Costo Dif USD)")
+            render_lista_visual(
+                df_est_g,
+                "ESTADO",
+                ["Registros", "Unidades_Q", "Costo_Dif_USD"],
+                "Desglose por Estado (Registros y Costo Dif USD)",
+            )
 
         st.markdown("---")
-        st.markdown("**Matriz de Avance por Bodega**")
+        st.markdown("#### Matriz de Avance por Bodega")
         if not df_bod_av.empty:
-            st.dataframe(df_bod_av, use_container_width=True, hide_index=True)
+            render_tabla_html_limpia(
+                df_bod_av,
+                ["Bodega", "SKU_Teoricos", "SKU_Contados", "SKU_Pendientes", "Avance_Pct", "Tx", "Cantidad_Q", "Sobrantes", "Faltantes", "Cuadrados", "Costo_Dif_USD"],
+                max_filas=20,
+            )
 
 with tab_exp:
     st.markdown("### Detalle Filtrado & Exportación a Excel")
@@ -990,4 +1093,4 @@ with tab_exp:
             mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
             use_container_width=True,
         )
-        st.dataframe(df_rep.iloc[::-1], use_container_width=True, hide_index=True)
+        render_tabla_html_limpia(df_rep.iloc[::-1], COLS_REP, max_filas=50)
