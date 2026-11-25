@@ -562,7 +562,7 @@ def construir_resumen_bodega(df, nac_rows, muestreo=True, bodega_filtro="TODAS")
         cont_skus = int(grp["COD_SKU"].nunique()) if not grp.empty else 0
         pend_skus = max(teo_skus - cont_skus, 0) if teo_skus > 0 else 0
         pct_avance = round((cont_skus / teo_skus) * 100.0, 1) if teo_skus > 0 else 0.0
-        if not grp.empty or teo_skus > 0:
+        if not grp.empty or bodega_filtro != "TODAS":
             filas.append({
                 "Bodega": bod_k,
                 "SKU_Teoricos": teo_skus,
@@ -593,7 +593,7 @@ def render_lista_visual(df_plot, label_col, val_cols, titulo=""):
         max_val = 1.0
 
     for idx_r, r in enumerate(df_plot.to_dict(orient="records")):
-        etq = html.escape(str(r.get(label_col, "")).strip() or "SIN DATO")
+        etq = str(r.get(label_col, "")).strip() or "SIN DATO"
         v_main = float(r.get(col_main, 0.0) or 0.0)
         ratio = min(max(abs(v_main) / max_val, 0.0), 1.0)
 
@@ -615,13 +615,10 @@ def render_lista_visual(df_plot, label_col, val_cols, titulo=""):
                 val_sec_fmt = f"{v_sec:,.0f}" if float(v_sec).is_integer() else f"{v_sec:,.2f}"
             extras.append(f"**{c_sec}:** {val_sec_fmt}")
 
-        with st.container():
-            st.markdown(f"**{etq}** — **{col_main}:** `{main_fmt}`")
-            if extras:
-                st.caption(" | ".join(extras))
-            st.progress(ratio)
-            if idx_r < len(df_plot) - 1:
-                st.markdown("---")
+        st.markdown(f"**{etq}** — **{col_main}:** `{main_fmt}`")
+        if extras:
+            st.caption(" | ".join(extras))
+        st.progress(ratio, key=f"prog_{label_col}_{etq}_{idx_r}")
 
 
 def render_tabla_segura(df_in, cols, max_filas=50, key_suf="tbl"):
@@ -653,14 +650,7 @@ def render_tabla_segura(df_in, cols, max_filas=50, key_suf="tbl"):
         trs.append(f'<tr style="background:#FFFFFF;">{"".join(tds)}</tr>')
 
     st.markdown(
-        f"""
-        <div style="overflow-x:auto;border-radius:8px;border:1px solid #CBD5E1;margin-top:6px;margin-bottom:10px;">
-            <table style="width:100%;border-collapse:collapse;">
-                <thead><tr>{ths}</tr></thead>
-                <tbody>{"".join(trs)}</tbody>
-            </table>
-        </div>
-        """,
+        f'<div style="overflow-x:auto;border-radius:8px;border:1px solid #CBD5E1;margin-top:6px;margin-bottom:10px;"><table style="width:100%;border-collapse:collapse;"><thead><tr>{ths}</tr></thead><tbody>{"".join(trs)}</tbody></table></div>',
         unsafe_allow_html=True,
     )
     if len(df_in) > max_filas:
@@ -824,6 +814,9 @@ if st.sidebar.button("Refrescar datos", use_container_width=True, key="btn_ref_t
 st.sidebar.markdown("---")
 st.sidebar.markdown("### Filtros de Análisis & Reportes")
 incluir_gs_rep = st.sidebar.checkbox("Incluir registros de Google Sheets", value=False, key="chk_inc_gs")
+origen_label = "JSON local + Google Sheets" if incluir_gs_rep else "Solo JSON local (toma_fisica_registros.json)"
+st.sidebar.caption(f"Origen activo: {origen_label}")
+
 df_base_rep = prep_df(datos_combinados(incluir_gs=incluir_gs_rep))
 muestreo_rep = "Muestreo" in tipo_proc
 
@@ -838,7 +831,6 @@ if st.sidebar.button("Refrescar estadísticas", use_container_width=True, key="b
     leer_gs.clear()
     cargar_pivot.clear()
     cargar_nac.clear()
-    st.rerun()
 
 df_rep = df_base_rep.copy()
 if not df_rep.empty:
@@ -1086,8 +1078,8 @@ with tab_op:
 with tab_dash:
     st.markdown("### Panorama General de Toma Física & Avance Nacional")
     st.caption(
-        f"**Filtros activos ->** Fuente GS: `{'SÍ' if incluir_gs_rep else 'NO'}` | Periodo: `{f_per}` | "
-        f"Bodega: `{f_bod}` | Ciudad: `{f_ciu}` | Custodio: `{f_cus}` | SKU: `{f_sku or 'TODOS'}` | Prov: `{f_prv or 'TODOS'}`"
+        f"**Origen:** `{origen_label}` | **Filas base:** `{len(df_base_rep)}` -> **Filtradas:** `{len(df_rep)}` | "
+        f"**Filtros:** Periodo `{f_per}` | Bodega `{f_bod}` | Ciudad `{f_ciu}` | Custodio `{f_cus}` | SKU `{f_sku or 'TODOS'}` | Prov `{f_prv or 'TODOS'}`"
     )
 
     if df_rep.empty:
@@ -1108,7 +1100,7 @@ with tab_dash:
             f"**Estados en filtro:** &nbsp; **SOBRANTE:** `{sob_cnt}` &nbsp;|&nbsp; **FALTANTE:** `{fal_cnt}` &nbsp;|&nbsp; **CUADRADO (OK):** `{ok_cnt}`"
         )
 
-        st.markdown("---")
+        st.divider()
         g1, g2 = st.columns(2)
         with g1:
             df_bod_av = construir_resumen_bodega(df_rep, nac_rows, muestreo=muestreo_rep, bodega_filtro=f_bod)
@@ -1132,6 +1124,7 @@ with tab_dash:
                 "Actividad por Custodio (Tx y Unidades Q)",
             )
 
+        st.divider()
         g3, g4 = st.columns(2)
         with g3:
             df_ciu_g = (
@@ -1158,7 +1151,7 @@ with tab_dash:
                 "Desglose por Estado (Registros y Costo Dif USD)",
             )
 
-        st.markdown("---")
+        st.divider()
         st.markdown("#### Matriz de Avance por Bodega")
         if not df_bod_av.empty:
             render_tabla_segura(
