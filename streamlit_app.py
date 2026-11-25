@@ -109,7 +109,7 @@ WEB_APP_URL = "https://script.google.com/macros/s/AKfycbxGk8xG7zUy0vu-OUXwgg_qlU
 BODEGAS_OFICIALES = ["01", "03", "04", "05", "3V", "5V"]
 MAPEO_BOD_COL = {"01": 5, "03": 6, "04": 7, "05": 8, "3V": 9, "5V": 10}
 IDX_TOTAL_NAC = 11
-IDX_MOV_V = 21
+IDX_COL_V = 21  # Columna V: define qué SKUs entran al conteo (excluir "SIN MOV")
 
 CUSTODIO_BOD = {
     "alexpajaritoruiz@icloud.com": BODEGAS_OFICIALES,
@@ -151,13 +151,20 @@ def num_es(v):
         return 0.0
     if isinstance(v, (int, float)):
         return float(v)
-    s = str(v).strip().replace("USD", "").replace("$", "").strip()
+    s = str(v).strip().replace("USD", "").replace("$", "").replace(" ", "")
     if not s:
         return 0.0
     if "," in s and "." in s:
-        s = s.replace(".", "").replace(",", ".")
+        if s.rfind(",") > s.rfind("."):
+            s = s.replace(".", "").replace(",", ".")
+        else:
+            s = s.replace(",", "")
     elif "," in s:
-        s = s.replace(",", ".")
+        partes = s.split(",")
+        if len(partes) == 2 and len(partes[1]) == 3 and partes[0].lstrip("-").isdigit():
+            s = s.replace(",", "")
+        else:
+            s = s.replace(",", ".")
     try:
         return float(s)
     except Exception:
@@ -339,7 +346,7 @@ def prep_df(regs):
         if c not in df.columns:
             df[c] = ""
     df["Bodega"] = df["Bodega"].apply(norm_bod)
-    df["Ciudad"] = df["Ciudad"].astype(str).str.strip()
+    df["Ciudad"] = df["Ciudad"].astype(str).str.strip().str.upper()
     df["Periodo"] = df["Periodo"].astype(str).str.strip()
     df["Correo_Usuario"] = df["Correo_Usuario"].astype(str).str.strip().str.lower()
     df["COD_SKU"] = df["COD_SKU"].astype(str).str.strip().str.upper()
@@ -368,37 +375,67 @@ def tabla_md(df, cols, n=8):
 
 
 def resolver_col_bodega(nac_rows, bod):
-    idx_b = MAPEO_BOD_COL.get(bod, None)
-    if idx_b is not None:
-        return idx_b
+    bod_n = norm_bod(bod)
     if nac_rows and len(nac_rows) > 0:
         for i, h in enumerate(nac_rows[0]):
-            if norm_bod(h) == bod:
+            if norm_bod(h) == bod_n:
                 return i
-    return 5
+    return MAPEO_BOD_COL.get(bod_n, 5)
 
 
-def contar_teoricos_bodega(nac_rows, bod, muestreo=False):
+def sku_habilitado_col_v(row, muestreo=True):
+    """
+    Valida Columna V (índice 21):
+    - En modo muestreo, si está vacía o contiene 'SIN MOV', el SKU no entra al conteo.
+    - Si tiene valor distinto a 'SIN MOV', queda habilitado para revisar su saldo en la bodega.
+    """
+    if not muestreo:
+        return True
+    val_v = str(row[IDX_COL_V] or "").strip().upper() if IDX_COL_V < len(row) else ""
+    if not val_v or val_v in ["SIN MOV", "SIN_MOV", "NONE", "NAN", "0"]:
+        return False
+    return True
+
+
+def obtener_skus_teoricos_bodega(nac_rows, dict_maestro, bod, muestreo=True):
+    """
+    1) Revisa Columna V para determinar qué SKUs deben contarse (excluyendo 'SIN MOV').
+    2) Regresa a la columna de la bodega activa para verificar saldo > 0.
+    """
+    skus_set = set()
+    desc_map = {}
+    if not nac_rows or len(nac_rows) <= 1:
+        return [], desc_map
+
     idx_b = resolver_col_bodega(nac_rows, bod)
-    skus = set()
-    if len(nac_rows) > 1:
-        for row in nac_rows[1:]:
-            if not row or not row[0]:
-                continue
-            sv = str(row[0]).strip().upper()
-            if not sv or sv in ["NONE", "NAN"]:
-                continue
-            stb = num_es(row[idx_b]) if idx_b < len(row) else 0.0
-            if stb > 0:
-                if muestreo:
-                    mv = str(row[IDX_MOV_V] or "").strip().upper() if IDX_MOV_V < len(row) else ""
-                    if mv in ["", "SIN MOV"]:
-                        continue
-                skus.add(sv)
+    for row in nac_rows[1:]:
+        if not row or len(row) == 0 or row[0] is None:
+            continue
+        sv = str(row[0]).strip().upper()
+        if not sv or sv in ["NONE", "NAN"]:
+            continue
+
+        if not sku_habilitado_col_v(row, muestreo=muestreo):
+            continue
+
+        saldo_bod = num_es(row[idx_b]) if idx_b < len(row) else 0.0
+        if saldo_bod > 0:
+            skus_set.add(sv)
+            if sv not in desc_map:
+                desc_map[sv] = next(
+                    (v for k, v in dict_maestro.get(sv, {}).items() if "DESC" in k),
+                    "",
+                )
+
+    return sorted(skus_set), desc_map
+
+
+def contar_teoricos_bodega(nac_rows, bod, muestreo=True):
+    skus, _ = obtener_skus_teoricos_bodega(nac_rows, {}, bod, muestreo=muestreo)
     return len(skus)
 
 
-def construir_metricas_avance(df, nac_rows, muestreo=False):
+def construir_metricas_avance(df, nac_rows, muestreo=True):
     if df.empty:
         return []
     filas = []
@@ -426,7 +463,7 @@ def construir_metricas_avance(df, nac_rows, muestreo=False):
     return filas
 
 
-def construir_resumen_bodega(df, nac_rows, muestreo=False):
+def construir_resumen_bodega(df, nac_rows, muestreo=True):
     filas = []
     for bod_k in BODEGAS_OFICIALES:
         grp = df[df["Bodega"] == bod_k] if not df.empty else pd.DataFrame(columns=COLS_REP)
@@ -452,7 +489,29 @@ def construir_resumen_bodega(df, nac_rows, muestreo=False):
     return pd.DataFrame(filas)
 
 
-def excel_bytes(df, nac_rows=None, muestreo=False):
+def grafico_seguro_barras(df_plot, label_col, val_cols, titulo=""):
+    """Intenta st.bar_chart; si falla rpds/altair en Win7/Py3.8, dibuja barras limpias sin romper."""
+    if titulo:
+        st.markdown(f"**{titulo}**")
+    if df_plot is None or df_plot.empty:
+        st.info("Sin datos para graficar con los filtros actuales.")
+        return
+    try:
+        st.bar_chart(df_plot.set_index(label_col)[val_cols], use_container_width=True)
+    except (ImportError, OSError) as e_dll:
+        log_err(f"Chart fallback ({e_dll.__class__.__name__})")
+        col_main = val_cols[0]
+        max_val = max(float(df_plot[col_main].max()), 1.0)
+        for _, r in df_plot.iterrows():
+            etq = str(r[label_col])
+            v_num = float(r[col_main])
+            ratio = min(max(abs(v_num) / max_val, 0.0), 1.0)
+            st.caption(f"{etq}: {v_num:,.2f}")
+            st.progress(ratio)
+        st.dataframe(df_plot[[label_col] + val_cols], use_container_width=True, hide_index=True)
+
+
+def excel_bytes(df, nac_rows=None, muestreo=True):
     wb = openpyxl.Workbook()
     ws = wb.active
     ws.title = "DetalleTomaFisica"
@@ -706,7 +765,7 @@ with tab_op:
     if not st.session_state["per_abierto"]:
         st.warning("Periodo CERRADO: el superusuario debe abrir el periodo para registrar.")
     if not os.path.exists(nac_path):
-        st.warning("Sin `NAC.xlsx` en este host: digita o escanea `COD_SKU` y registra.")
+        st.warning("Sin `NAC.xlsx` en este host: los SKUs teóricos en >0 quedan en 0; puedes digitar o escanear `COD_SKU` y registrar.")
 
     c1, c2, c3 = st.columns(3)
     ciudad = c1.selectbox("Ciudad:", ciudades, key="ciu_in")
@@ -715,39 +774,17 @@ with tab_op:
 
     idx_b = resolver_col_bodega(nac_rows, bod_norm)
     muestreo = "Muestreo" in tipo_proc
-    skus_bod, desc_map, ya_aud = [], {}, set()
-
+    ya_aud = set()
     for r in regs_json:
         if str(r.get("Periodo", "")).strip() == periodo_act and norm_bod(r.get("Bodega", "")) == bod_norm:
             ya_aud.add(str(r.get("COD_SKU", "")).strip().upper())
 
-    if len(nac_rows) > 1:
-        for row in nac_rows[1:]:
-            if not row or not row[0]:
-                continue
-            sv = str(row[0]).strip().upper()
-            if not sv or sv in ["NONE", "NAN"]:
-                continue
-            stb = num_es(row[idx_b]) if idx_b < len(row) else 0.0
-            if stb > 0:
-                if muestreo:
-                    mv = str(row[IDX_MOV_V] or "").strip().upper() if IDX_MOV_V < len(row) else ""
-                    if mv in ["", "SIN MOV"]:
-                        continue
-                d_it = next((v for k, v in dict_maestro.get(sv, {}).items() if "DESC" in k), "")
-                skus_bod.append(sv)
-                desc_map[sv] = d_it
-
-    if not skus_bod and dict_maestro:
-        skus_bod = sorted(dict_maestro.keys())
-        for sv in skus_bod:
-            desc_map[sv] = next((v for k, v in dict_maestro.get(sv, {}).items() if "DESC" in k), "")
-
-    skus_unicos = sorted(set(skus_bod))
+    # 1) Filtra por Columna V (excluyendo "SIN MOV") y 2) revisa saldo > 0 en bodega activa
+    skus_unicos, desc_map = obtener_skus_teoricos_bodega(nac_rows, dict_maestro, bod_norm, muestreo=muestreo)
     tot_teo_bod = len(skus_unicos)
     aud_bod_cnt = len([s for s in skus_unicos if s in ya_aud])
     pend_bod_cnt = max(tot_teo_bod - aud_bod_cnt, 0)
-    st.caption(f"Guía Bodega `{bod_norm}` -> Teóricos: **{tot_teo_bod}** | Auditados: **{aud_bod_cnt}** | Pendientes: **{pend_bod_cnt}**")
+    st.caption(f"Guía SKU Bodega `{bod_norm}` (Col V + saldo >0) -> SKUs Teóricos: **{tot_teo_bod}** | Auditados: **{aud_bod_cnt}** | Pendientes: **{pend_bod_cnt}**")
 
     opts = ["-- SELECCIONE O ESCANEE SKU --"] + [
         f"{s} | {'[AUDITADO]' if s in ya_aud else '[PENDIENTE]'} {desc_map.get(s, '')}" for s in skus_unicos
@@ -790,8 +827,11 @@ with tab_op:
         if len(nac_rows) > 1:
             for row in nac_rows[1:]:
                 if row and row[0] and str(row[0]).strip().upper() == cod_sku:
-                    st_teo = num_es(row[idx_b]) if idx_b < len(row) else 0.0
                     st_nac = num_es(row[IDX_TOTAL_NAC]) if IDX_TOTAL_NAC < len(row) else 0.0
+                    if sku_habilitado_col_v(row, muestreo=muestreo):
+                        st_teo = num_es(row[idx_b]) if idx_b < len(row) else 0.0
+                    else:
+                        st_teo = 0.0
                     break
         prev = sum(
             num_es(r.get("Q", 0))
@@ -803,10 +843,10 @@ with tab_op:
             0.0,
         )
         q_act_val = float(cant)
-        q_acum_calc = float(prev) + q_act_val
+        q_acum_calc = round(float(prev) + q_act_val, 4)
         dif, est_vista, _, c_dif_vista = calcular_dif_estado_costo(q_acum_calc, st_teo, q_act_val, c_unit_prev)
         st.info(
-            f"**SKU:** {cod_sku} | **Desc:** {flex('DESCRIPCIÓN', 'DESCRIPCION', 'DESC')} | **Und:** {flex('UNIDAD', 'UND')} | **Prov:** {flex('PROVEEDOR', 'SUP', 'FABRICANTE')}"
+            f"**SKU:** {cod_sku} | **Desc:** {flex('DESCRIPCIÓN', 'DESCRIPCION', 'DESC')} | **Und:** {flex('UNIDAD', 'UND')} | **Prov:** {flex('PROVEEDOR', 'SUP', 'FABRICANTE')} | **Acumulado Q:** {q_acum_calc:g}"
         )
         m1, m2, m3 = st.columns(3)
         m1.markdown(f'<div class="saldo-box"><span class="saldo-lbl">QSA_Teorico ({bod_norm})</span><span class="saldo-val">{st_teo:g}</span></div>', unsafe_allow_html=True)
@@ -880,11 +920,18 @@ with tab_op:
 
 with tab_dash:
     st.markdown("### Panorama General de Toma Física & Avance Nacional")
-    st.caption("Los gráficos y métricas reflejan los filtros activos en el panel izquierdo.")
+    st.caption(
+        f"Filtros activos -> Fuente GS: `{'SÍ' if incluir_gs_rep else 'NO'}` | Periodo: `{f_per}` | "
+        f"Bodega: `{f_bod}` | Ciudad: `{f_ciu}` | Custodio: `{f_cus}` | SKU: `{f_sku or 'TODOS'}` | Prov: `{f_prv or 'TODOS'}`"
+    )
 
     if df_rep.empty:
         st.info("No hay registros que coincidan con los filtros seleccionados en el panel izquierdo.")
     else:
+        sob_cnt = int((df_rep["ESTADO"] == "SOBRANTE").sum())
+        fal_cnt = int((df_rep["ESTADO"] == "FALTANTE").sum())
+        ok_cnt = int((df_rep["ESTADO"] == "CUADRADO (OK)").sum())
+
         k1, k2, k3, k4, k5 = st.columns(5)
         k1.metric("Transacciones (Tx)", f"{len(df_rep):,}")
         k2.metric("SKUs Únicos Contados", f"{df_rep['COD_SKU'].nunique():,}")
@@ -892,48 +939,42 @@ with tab_dash:
         k4.metric("Valor Contado (USD)", f"${df_rep['COSTO TOTAL'].sum():,.2f}")
         k5.metric("Impacto Dif. (USD)", f"${df_rep['COSTO DIF'].sum():,.2f}")
 
+        st.caption(f"Estados en filtro -> SOBRANTE: **{sob_cnt}** | FALTANTE: **{fal_cnt}** | CUADRADO (OK): **{ok_cnt}**")
+
         st.markdown("---")
         g1, g2 = st.columns(2)
         with g1:
-            st.markdown("**Avance de SKUs por Bodega (Contados vs Pendientes)**")
             df_bod_av = construir_resumen_bodega(df_rep, nac_rows, muestreo=muestreo_rep)
-            if not df_bod_av.empty:
-                st.bar_chart(df_bod_av.set_index("Bodega")[["SKU_Contados", "SKU_Pendientes"]], use_container_width=True)
-            else:
-                st.info("Sin datos por bodega.")
+            grafico_seguro_barras(df_bod_av, "Bodega", ["SKU_Contados", "SKU_Pendientes"], "Avance de SKUs por Bodega (Contados vs Pendientes)")
 
         with g2:
-            st.markdown("**Actividad por Custodio (Transacciones y Unidades Q)**")
             df_cus_g = (
                 df_rep.groupby("Correo_Usuario", as_index=False)
                 .agg(Transacciones=("ID_Tx", "count"), Unidades_Q=("Q", "sum"))
                 .sort_values("Transacciones", ascending=False)
             )
-            st.bar_chart(df_cus_g.set_index("Correo_Usuario")[["Transacciones", "Unidades_Q"]], use_container_width=True)
+            grafico_seguro_barras(df_cus_g, "Correo_Usuario", ["Transacciones", "Unidades_Q"], "Actividad por Custodio (Tx y Unidades Q)")
 
         g3, g4 = st.columns(2)
         with g3:
-            st.markdown("**Distribución por Ciudad (Unidades Q Contadas)**")
             df_ciu_g = (
                 df_rep.groupby("Ciudad", as_index=False)
                 .agg(Transacciones=("ID_Tx", "count"), Unidades_Q=("Q", "sum"), Costo_Dif_USD=("COSTO DIF", "sum"))
                 .sort_values("Unidades_Q", ascending=False)
             )
-            st.bar_chart(df_ciu_g.set_index("Ciudad")[["Transacciones", "Unidades_Q"]], use_container_width=True)
+            grafico_seguro_barras(df_ciu_g, "Ciudad", ["Transacciones", "Unidades_Q"], "Distribución por Ciudad (Tx y Unidades Q)")
 
         with g4:
-            st.markdown("**Desglose por Estado (SOBRANTE / FALTANTE / CUADRADO)**")
             df_est_g = (
                 df_rep.groupby("ESTADO", as_index=False)
                 .agg(Registros=("ID_Tx", "count"), Costo_Dif_USD=("COSTO DIF", "sum"))
             )
-            st.bar_chart(df_est_g.set_index("ESTADO")[["Registros"]], use_container_width=True)
+            grafico_seguro_barras(df_est_g, "ESTADO", ["Registros", "Costo_Dif_USD"], "Desglose por Estado (Registros y Costo Dif USD)")
 
         st.markdown("---")
         st.markdown("**Matriz de Avance por Bodega**")
-        df_bod_tabla = construir_resumen_bodega(df_rep, nac_rows, muestreo=muestreo_rep)
-        if not df_bod_tabla.empty:
-            st.dataframe(df_bod_tabla, use_container_width=True, hide_index=True)
+        if not df_bod_av.empty:
+            st.dataframe(df_bod_av, use_container_width=True, hide_index=True)
 
 with tab_exp:
     st.markdown("### Detalle Filtrado & Exportación a Excel")
