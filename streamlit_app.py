@@ -77,11 +77,6 @@ st.session_state["errores_ui"] = []
 st.session_state.setdefault("cap_v", 0)
 
 
-def log_err(msg):
-    st.session_state["errores_ui"].append(f"{datetime.now().strftime('%H:%M:%S')} | {msg}")
-    st.session_state["errores_ui"] = st.session_state["errores_ui"][-10:]
-
-
 def resolver_ruta(win_path, rel_name):
     if os.path.exists(win_path):
         return win_path
@@ -104,7 +99,9 @@ pivot_path = resolver_ruta(r"D:\Bases\MICRO\PRODUCTO - PIVOT.xlsm", "PRODUCTO - 
 nac_path = resolver_ruta(r"D:\Bases\MICRO\NAC.xlsx", "NAC.xlsx")
 json_path = resolver_ruta(r"D:\Bases\ADM LOG\toma_fisica_registros.json", "toma_fisica_registros.json")
 enviados_path = resolver_ruta(r"D:\Bases\ADM LOG\tx_enviados_gs.json", "tx_enviados_gs.json")
+logs_path = resolver_ruta(r"D:\Bases\ADM LOG\toma_fisica_logs.json", "toma_fisica_logs.json")
 WEB_APP_URL = "https://script.google.com/macros/s/AKfycbxGk8xG7zUy0vu-OUXwgg_qlUS8lmNlU1bh_CygmJkpieTt2jdfOkknoUjAKKis7EiA5g/exec"
+PESTANA_LOGS_GS = "Logs_UI"
 
 BODEGAS_OFICIALES = ["01", "03", "04", "05", "3V", "5V"]
 MAPEO_BOD_COL = {"01": 5, "03": 6, "04": 7, "05": 8, "3V": 9, "5V": 10}
@@ -126,6 +123,98 @@ COLS_REP = [
     "PROVEEDOR", "ALTERNO", "DESCRIPCIÓN", "UNIDAD", "DIFERENCIA", "ESTADO",
     "COSTO UNITARIO", "COSTO TOTAL", "COSTO DIF", "QSA_Teorico",
 ]
+
+# Pestaña Logs_UI en Google Sheets -> Columnas A:C
+COLS_LOGS_GS = ["Timestamp", "Usuario", "Error_UI"]
+COLS_LOG_UI = ["Timestamp", "Usuario", "Error_UI", "Enviado_GS"]
+
+
+def cargar_logs():
+    if os.path.exists(logs_path):
+        try:
+            with open(logs_path, "r", encoding="utf-8") as f:
+                d = json.load(f)
+                return d if isinstance(d, list) else []
+        except Exception:
+            return []
+    return []
+
+
+def guardar_logs_lista(lista_logs):
+    try:
+        os.makedirs(os.path.dirname(logs_path), exist_ok=True)
+        with open(logs_path, "w", encoding="utf-8") as f:
+            json.dump(lista_logs[-500:], f, indent=2, ensure_ascii=False)
+        return True
+    except Exception:
+        return False
+
+
+def registrar_log(detalle, origen="APP", usuario=""):
+    """Registra errores reales para Logs_UI (A:C) e ignora ruido benigno."""
+    det_s = str(detalle or "").strip()
+    if not det_s:
+        return
+    if "InsecureRequestWarning" in det_s or "Chart fallback" in det_s:
+        return
+
+    now_s = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    usr_s = str(usuario or st.session_state.get("usr_act", "sistema")).strip().lower()
+    err_texto = f"[{str(origen or 'APP').upper()}] {det_s[:280]}"
+
+    item = {
+        "Timestamp": now_s,
+        "Usuario": usr_s,
+        "Error_UI": err_texto,
+        "Enviado_GS": "NO",
+    }
+    logs = cargar_logs()
+    logs.append(item)
+    guardar_logs_lista(logs)
+    st.session_state["errores_ui"].append(f"{now_s[11:]} | {err_texto}")
+    st.session_state["errores_ui"] = st.session_state["errores_ui"][-5:]
+
+
+def log_err(msg, origen="APP"):
+    registrar_log(msg, origen=origen)
+
+
+def enviar_logs_a_gs(logs_pendientes):
+    """Envía logs a la pestaña Logs_UI (columnas A:C -> Timestamp, Usuario, Error_UI)."""
+    if not logs_pendientes:
+        return 0, 0
+    enviados_ok = 0
+    intentos = 0
+    for lg in logs_pendientes:
+        intentos += 1
+        ts_v = str(lg.get("Timestamp", datetime.now().strftime("%Y-%m-%d %H:%M:%S")))
+        usr_v = str(lg.get("Usuario", "sistema")).strip().lower()
+        err_v = str(lg.get("Error_UI", "")).strip()
+        payload_log = {
+            "sheet": PESTANA_LOGS_GS,
+            "pestana": PESTANA_LOGS_GS,
+            "action": "log_ui",
+            "Timestamp": ts_v,
+            "Usuario": usr_v,
+            "Error_UI": err_v,
+            "row": [ts_v, usr_v, err_v],
+        }
+        try:
+            r = requests.post(
+                WEB_APP_URL,
+                json=payload_log,
+                headers={"Content-Type": "application/json", "User-Agent": "Mozilla/5.0"},
+                verify=False,
+                timeout=15,
+                allow_redirects=True,
+            )
+            txt = (r.text or "").strip()
+            if r.status_code == 200 and "error" not in txt.lower():
+                lg["Enviado_GS"] = "SI"
+                enviados_ok += 1
+        except Exception:
+            pass
+    return enviados_ok, intentos
 
 
 def norm_bod(v):
@@ -199,7 +288,7 @@ def cargar_json():
                 d = json.load(f)
                 return d if isinstance(d, list) else []
         except Exception as e:
-            log_err(f"JSON leer: {e}")
+            log_err(f"JSON leer: {e}", origen="JSON")
             return []
     return []
 
@@ -213,7 +302,7 @@ def guardar_json(reg):
             json.dump(regs, f, indent=2, ensure_ascii=False)
         return True
     except Exception as e:
-        log_err(f"JSON guardar: {e}")
+        log_err(f"JSON guardar: {e}", origen="JSON")
         return False
 
 
@@ -270,7 +359,7 @@ def leer_gs():
                         if d.get("ID_Tx") or d.get("COD_SKU"):
                             out.append(d)
     except Exception as e:
-        log_err(f"GS leer: {e}")
+        log_err(f"GS leer: {e}", origen="GS_GET")
     return out
 
 
@@ -314,10 +403,10 @@ def enviar_gs(reg, conocidos=None, modo_dup="omitir"):
             marcar_enviado(tx_env)
             leer_gs.clear()
         elif not ok:
-            log_err(f"GS post HTTP {r.status_code}: {txt[:120]}")
+            log_err(f"GS post HTTP {r.status_code}: {txt[:120]}", origen="GS_POST")
         return ok, ("sobreescrito" if modo_dup == "sobreescribir" else ("duplicado" if modo_dup == "duplicar" else "enviado")), tx_env
     except Exception as e:
-        log_err(f"GS post exc: {e}")
+        log_err(f"GS post exc: {e}", origen="GS_POST")
         return False, "error", tx_env
 
 
@@ -490,10 +579,7 @@ def construir_resumen_bodega(df, nac_rows, muestreo=True):
 
 
 def render_lista_visual(df_plot, label_col, val_cols, titulo="", mostrar_secundarios=True):
-    """
-    Renderiza tarjetas con negrilla, formato legible y barra de progreso sin usar
-    st.bar_chart ni st.dataframe (evita fallos de DLL de rpds/altair/pyarrow en Win7 + Py3.8).
-    """
+    """Renderiza tarjetas con negrilla y barra de progreso sin usar st.bar_chart ni st.dataframe."""
     if titulo:
         st.markdown(f"#### {titulo}")
     if df_plot is None or df_plot.empty:
@@ -672,7 +758,7 @@ def cargar_pivot(p):
                                                 dm[sv][cand[i]] = vs
                     break
     except Exception as e:
-        log_err(f"PIVOT: {e}")
+        log_err(f"PIVOT: {e}", origen="PIVOT")
     return dm
 
 
@@ -684,26 +770,22 @@ def cargar_nac(p):
         wb = openpyxl.load_workbook(p, data_only=True)
         return list(wb.active.iter_rows(values_only=True))
     except Exception as e:
-        log_err(f"NAC: {e}")
+        log_err(f"NAC: {e}", origen="NAC")
         return []
 
 
 dict_maestro = cargar_pivot(pivot_path)
 nac_rows = cargar_nac(nac_path)
 regs_json = cargar_json()
+logs_json = cargar_logs()
 f_script = fecha_arch(RUTA_SCRIPT)
 cap_v = st.session_state["cap_v"]
-
-st.markdown('<div class="main-title">Toma Física & Muestreo V7 gPro</div>', unsafe_allow_html=True)
-st.caption(f"Script: `{RUTA_SCRIPT}` | Modificado: `{f_script}`")
-
-if st.session_state["errores_ui"]:
-    st.error("Errores: " + " || ".join(st.session_state["errores_ui"][-3:]))
 
 # ==============================================================================
 # PANEL IZQUIERDO: CONTROL OPERATIVO + FILTROS MAESTROS DE ESTADÍSTICAS
 # ==============================================================================
 usuario = st.sidebar.text_input("Correo Usuario / Custodio:", value="alexpajaritoruiz@icloud.com").strip().lower()
+st.session_state["usr_act"] = usuario
 es_admin = usuario in {"alexpajaritoruiz@icloud.com", "jlogistica.eit@gmail.com"} or "ALEX" in usuario.upper() or "PAJARI" in usuario.upper()
 bods_perm = BODEGAS_OFICIALES if es_admin else CUSTODIO_BOD.get(usuario, ["01"])
 
@@ -820,21 +902,32 @@ if es_admin:
         else:
             st.sidebar.info("Sin registros locales.")
 
+pend_logs_cnt = sum(1 for lg in logs_json if str(lg.get("Enviado_GS", "NO")).upper() != "SI")
 st.sidebar.markdown("---")
 st.sidebar.markdown(
     f"**PIVOT:** {fecha_arch(pivot_path)}<br>"
     f"**NAC:** {fecha_arch(nac_path)}<br>"
-    f"**JSON:** {fecha_arch(json_path)} ({len(regs_json)})",
+    f"**JSON:** {fecha_arch(json_path)} ({len(regs_json)})<br>"
+    f"**{PESTANA_LOGS_GS}:** {len(logs_json)} ({pend_logs_cnt} sin enviar)",
     unsafe_allow_html=True,
 )
 
 # ==============================================================================
-# PESTAÑAS PRINCIPALES: OPERACIÓN | DASHBOARD VISUAL | EXPORTACIÓN
+# CABECERA + AVISO DISCRETO DE LOGS
+# ==============================================================================
+st.markdown('<div class="main-title">Toma Física & Muestreo V7 gPro</div>', unsafe_allow_html=True)
+st.caption(f"Script: `{RUTA_SCRIPT}` | Modificado: `{f_script}` | {PESTANA_LOGS_GS} locales: `{len(logs_json)}`")
+
+if st.session_state["errores_ui"]:
+    st.warning("Incidencias registradas en esta sesión: " + " || ".join(st.session_state["errores_ui"][-2:]))
+
+# ==============================================================================
+# PESTAÑAS PRINCIPALES: OPERACIÓN | DASHBOARD VISUAL | EXPORTACIÓN & LOGS_UI
 # ==============================================================================
 tab_op, tab_dash, tab_exp = st.tabs([
     "Operación y Captura de Campo",
     "Dashboard Estadístico & Avance Visual",
-    "Exportación & Detalle Filtrado",
+    f"Exportación, Detalle & {PESTANA_LOGS_GS}",
 ])
 
 with tab_op:
@@ -1094,3 +1187,36 @@ with tab_exp:
             use_container_width=True,
         )
         render_tabla_html_limpia(df_rep.iloc[::-1], COLS_REP, max_filas=50)
+
+    # ==========================================================================
+    # REPORTE DE LOGS -> PESTAÑA Logs_UI (COLUMNAS A:C -> Timestamp, Usuario, Error_UI)
+    # ==========================================================================
+    st.markdown("---")
+    st.markdown(f"### Reporte de LOGS (`{PESTANA_LOGS_GS}` -> Columnas `A:C`)")
+    st.caption("Registra incidencias reales con hora (`Timestamp`), `Usuario` y `Error_UI` para enviarlas a la pestaña `Logs_UI` del libro de Toma Física.")
+
+    logs_act = cargar_logs()
+    pend_logs = [lg for lg in logs_act if str(lg.get("Enviado_GS", "NO")).upper() != "SI"]
+
+    lcol1, lcol2, lcol3 = st.columns([1.6, 1.4, 2])
+    if lcol1.button(f"Enviar a {PESTANA_LOGS_GS} ({len(pend_logs)})", use_container_width=True, disabled=len(pend_logs) == 0):
+        ok_cnt_l, tot_cnt_l = enviar_logs_a_gs(pend_logs)
+        guardar_logs_lista(logs_act)
+        st.success(f"Enviados a {PESTANA_LOGS_GS}: {ok_cnt_l}/{tot_cnt_l} registros.")
+        st.rerun()
+
+    if lcol2.button("Limpiar LOGS locales", use_container_width=True, disabled=len(logs_act) == 0):
+        guardar_logs_lista([])
+        st.success("Historial de LOGS locales limpiado.")
+        st.rerun()
+
+    lcol3.caption(f"Pestaña destino: `{PESTANA_LOGS_GS}` (`A:C`) | Total: `{len(logs_act)}` | Pendientes: `{len(pend_logs)}`")
+
+    if logs_act:
+        df_logs = pd.DataFrame(logs_act).iloc[::-1]
+        for c_l in COLS_LOG_UI:
+            if c_l not in df_logs.columns:
+                df_logs[c_l] = ""
+        render_tabla_html_limpia(df_logs, COLS_LOG_UI, max_filas=40)
+    else:
+        st.info("Sin errores registrados en este momento.")
