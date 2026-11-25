@@ -10,6 +10,7 @@
 import os
 import json
 import io
+import html
 import urllib.parse
 import urllib3
 from datetime import date, datetime
@@ -63,9 +64,6 @@ st.markdown(
     }
     .saldo-lbl { font-size: 13px !important; font-weight: 700 !important; color: #1E3A8A !important; display: block; margin-bottom: 4px; }
     .saldo-val { font-size: 22px !important; font-weight: 900 !important; color: #0F172A !important; display: block; }
-    .sob { background: #DCFCE7; color: #14532D !important; padding: 10px 14px; border-radius: 8px; font-size: 18px !important; font-weight: 900; text-align: center; border: 2px solid #22C55E; }
-    .fal { background: #FEE2E2; color: #7F1D1D !important; padding: 10px 14px; border-radius: 8px; font-size: 18px !important; font-weight: 900; text-align: center; border: 2px solid #EF4444; }
-    .ok  { background: #FEF9C3; color: #713F12 !important; padding: 10px 14px; border-radius: 8px; font-size: 18px !important; font-weight: 900; text-align: center; border: 2px solid #EAB308; }
 </style>
 """,
     unsafe_allow_html=True,
@@ -106,7 +104,7 @@ PESTANA_LOGS_GS = "Logs_UI"
 BODEGAS_OFICIALES = ["01", "03", "04", "05", "3V", "5V"]
 MAPEO_BOD_COL = {"01": 5, "03": 6, "04": 7, "05": 8, "3V": 9, "5V": 10}
 IDX_TOTAL_NAC = 11
-IDX_COL_V = 21  # Columna V: define qué SKUs entran al conteo (excluir "SIN MOV")
+IDX_COL_V = 21
 
 CUSTODIO_BOD = {
     "alexpajaritoruiz@icloud.com": BODEGAS_OFICIALES,
@@ -116,7 +114,6 @@ CUSTODIO_BOD = {
     "bodegauio.eit@gmail.com": ["05", "5V"],
 }
 
-# Estructura oficial de 22 columnas: A-U intactas + QSA_Teorico al final (Columna V)
 COLS_REP = [
     "Periodo", "ID_Tx", "Timestamp", "Correo_Usuario", "Ciudad", "Bodega",
     "Ubicacion", "COD_SKU", "Q", "BOD/SKU", "Motivo", "LINEA DE INVENTARIO",
@@ -124,8 +121,6 @@ COLS_REP = [
     "COSTO UNITARIO", "COSTO TOTAL", "COSTO DIF", "QSA_Teorico",
 ]
 
-# Pestaña Logs_UI en Google Sheets -> Columnas A:C
-COLS_LOGS_GS = ["Timestamp", "Usuario", "Error_UI"]
 COLS_LOG_UI = ["Timestamp", "Usuario", "Error_UI", "Enviado_GS"]
 
 
@@ -151,7 +146,6 @@ def guardar_logs_lista(lista_logs):
 
 
 def registrar_log(detalle, origen="APP", usuario=""):
-    """Registra errores reales para Logs_UI (A:C) e ignora ruido benigno."""
     det_s = str(detalle or "").strip()
     if not det_s:
         return
@@ -180,7 +174,6 @@ def log_err(msg, origen="APP"):
 
 
 def enviar_logs_a_gs(logs_pendientes):
-    """Envía logs a la pestaña Logs_UI (columnas A:C -> Timestamp, Usuario, Error_UI)."""
     if not logs_pendientes:
         return 0, 0
     enviados_ok = 0
@@ -473,11 +466,6 @@ def resolver_col_bodega(nac_rows, bod):
 
 
 def sku_habilitado_col_v(row, muestreo=True):
-    """
-    Valida Columna V (índice 21):
-    - En modo muestreo, si está vacía o contiene 'SIN MOV', el SKU no entra al conteo.
-    - Si tiene valor distinto a 'SIN MOV', queda habilitado para revisar su saldo en la bodega.
-    """
     if not muestreo:
         return True
     val_v = str(row[IDX_COL_V] or "").strip().upper() if IDX_COL_V < len(row) else ""
@@ -487,10 +475,6 @@ def sku_habilitado_col_v(row, muestreo=True):
 
 
 def obtener_skus_teoricos_bodega(nac_rows, dict_maestro, bod, muestreo=True):
-    """
-    1) Revisa Columna V para determinar qué SKUs deben contarse (excluyendo 'SIN MOV').
-    2) Regresa a la columna de la bodega activa para verificar saldo > 0.
-    """
     skus_set = set()
     desc_map = {}
     if not nac_rows or len(nac_rows) <= 1:
@@ -578,8 +562,7 @@ def construir_resumen_bodega(df, nac_rows, muestreo=True):
     return pd.DataFrame(filas)
 
 
-def render_lista_visual(df_plot, label_col, val_cols, titulo="", mostrar_secundarios=True):
-    """Renderiza tarjetas con negrilla y barra de progreso sin usar st.bar_chart ni st.dataframe."""
+def render_lista_visual(df_plot, label_col, val_cols, titulo=""):
     if titulo:
         st.markdown(f"#### {titulo}")
     if df_plot is None or df_plot.empty:
@@ -591,8 +574,8 @@ def render_lista_visual(df_plot, label_col, val_cols, titulo="", mostrar_secunda
     if max_val <= 0:
         max_val = 1.0
 
-    for _, r in df_plot.iterrows():
-        etq = str(r.get(label_col, "")).strip() or "SIN DATO"
+    for idx_r, r in enumerate(df_plot.to_dict(orient="records")):
+        etq = html.escape(str(r.get(label_col, "")).strip() or "SIN DATO")
         v_main = float(r.get(col_main, 0.0) or 0.0)
         ratio = min(max(abs(v_main) / max_val, 0.0), 1.0)
 
@@ -604,44 +587,37 @@ def render_lista_visual(df_plot, label_col, val_cols, titulo="", mostrar_secunda
             main_fmt = f"{v_main:,.0f}" if float(v_main).is_integer() else f"{v_main:,.2f}"
 
         extras = []
-        if mostrar_secundarios and len(val_cols) > 1:
-            for c_sec in val_cols[1:]:
-                v_sec = float(r.get(c_sec, 0.0) or 0.0)
-                if "USD" in c_sec.upper() or "COSTO" in c_sec.upper():
-                    val_sec_fmt = f"${v_sec:,.2f}"
-                elif "PCT" in c_sec.upper():
-                    val_sec_fmt = f"{v_sec:,.1f}%"
-                else:
-                    val_sec_fmt = f"{v_sec:,.0f}" if float(v_sec).is_integer() else f"{v_sec:,.2f}"
-                extras.append(f"<b>{c_sec}:</b> {val_sec_fmt}")
+        for c_sec in val_cols[1:]:
+            v_sec = float(r.get(c_sec, 0.0) or 0.0)
+            if "USD" in c_sec.upper() or "COSTO" in c_sec.upper():
+                val_sec_fmt = f"${v_sec:,.2f}"
+            elif "PCT" in c_sec.upper():
+                val_sec_fmt = f"{v_sec:,.1f}%"
+            else:
+                val_sec_fmt = f"{v_sec:,.0f}" if float(v_sec).is_integer() else f"{v_sec:,.2f}"
+            extras.append(f"**{c_sec}:** {val_sec_fmt}")
 
-        extra_txt = " &nbsp;|&nbsp; ".join(extras)
-        st.markdown(
-            f"""
-            <div style="background:#FFFFFF;border:1px solid #CBD5E1;border-left:5px solid #0F172A;border-radius:8px;padding:12px 16px;margin-top:6px;margin-bottom:6px;">
-                <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px;">
-                    <span style="font-size:15px;font-weight:800;color:#0F172A;">{etq}</span>
-                    <span style="font-size:15px;font-weight:900;color:#1D4ED8;"><b>{col_main}:</b> {main_fmt}</span>
-                </div>
-                <div style="font-size:13px;color:#334155;">{extra_txt}</div>
-            </div>
-            """,
-            unsafe_allow_html=True,
-        )
-        st.progress(ratio)
+        with st.container():
+            st.markdown(f"**{etq}** — **{col_main}:** `{main_fmt}`")
+            if extras:
+                st.caption(" | ".join(extras))
+            st.progress(ratio)
+            if idx_r < len(df_plot) - 1:
+                st.markdown("---")
 
 
-def render_tabla_html_limpia(df_in, cols, max_filas=50):
+def render_tabla_segura(df_in, cols, max_filas=50, key_suf="tbl"):
+    """Renderiza tabla HTML sin usar st.dataframe/pyarrow para evitar errores de DLL en Python 3.8."""
     if df_in is None or df_in.empty:
         st.info("No hay registros disponibles con los filtros actuales.")
         return
     sub = df_in[cols].head(max_filas)
     ths = "".join(
-        f'<th style="background:#0F172A;color:#FFFFFF!important;padding:9px 10px;text-align:left;font-weight:800;border:1px solid #334155;">{c}</th>'
+        f'<th style="background:#0F172A;color:#FFFFFF!important;padding:8px 10px;text-align:left;font-weight:700;border:1px solid #334155;white-space:nowrap;">{html.escape(str(c))}</th>'
         for c in cols
     )
     trs = []
-    for _, row in sub.iterrows():
+    for row in sub.to_dict(orient="records"):
         tds = []
         for c in cols:
             val = row.get(c, "")
@@ -655,13 +631,13 @@ def render_tabla_html_limpia(df_in, cols, max_filas=50):
             else:
                 txt = str(val or "")
             tds.append(
-                f'<td style="padding:8px 10px;border:1px solid #CBD5E1;color:#0F172A!important;font-size:13px;">{txt}</td>'
+                f'<td style="padding:7px 10px;border:1px solid #CBD5E1;color:#0F172A!important;font-size:13px;white-space:nowrap;">{html.escape(txt)}</td>'
             )
         trs.append(f'<tr style="background:#FFFFFF;">{"".join(tds)}</tr>')
 
     st.markdown(
         f"""
-        <div style="overflow-x:auto;border-radius:8px;border:1px solid #CBD5E1;margin-top:8px;margin-bottom:10px;">
+        <div style="overflow-x:auto;border-radius:8px;border:1px solid #CBD5E1;margin-top:6px;margin-bottom:10px;">
             <table style="width:100%;border-collapse:collapse;">
                 <thead><tr>{ths}</tr></thead>
                 <tbody>{"".join(trs)}</tbody>
@@ -784,12 +760,12 @@ cap_v = st.session_state["cap_v"]
 # ==============================================================================
 # PANEL IZQUIERDO: CONTROL OPERATIVO + FILTROS MAESTROS DE ESTADÍSTICAS
 # ==============================================================================
-usuario = st.sidebar.text_input("Correo Usuario / Custodio:", value="alexpajaritoruiz@icloud.com").strip().lower()
+usuario = st.sidebar.text_input("Correo Usuario / Custodio:", value="alexpajaritoruiz@icloud.com", key="usr_in").strip().lower()
 st.session_state["usr_act"] = usuario
 es_admin = usuario in {"alexpajaritoruiz@icloud.com", "jlogistica.eit@gmail.com"} or "ALEX" in usuario.upper() or "PAJARI" in usuario.upper()
 bods_perm = BODEGAS_OFICIALES if es_admin else CUSTODIO_BOD.get(usuario, ["01"])
 
-tipo_proc = st.sidebar.radio("Modo:", ["Control Mensual de Inventario (Muestreo)", "Toma Física Completa"])
+tipo_proc = st.sidebar.radio("Modo:", ["Control Mensual de Inventario (Muestreo)", "Toma Física Completa"], key="modo_proc_in")
 if "bod_act" not in st.session_state or st.session_state["bod_act"] not in bods_perm:
     st.session_state["bod_act"] = bods_perm[0]
 
@@ -805,15 +781,15 @@ ciudades = ["Quito"] if bod_norm in ["01", "05", "5V"] else (["Guayaquil"] if bo
 if "per_abierto" not in st.session_state:
     st.session_state["per_abierto"] = False
 if es_admin:
-    st.session_state["per_abierto"] = st.sidebar.toggle("Periodo abierto (Admin)", value=st.session_state["per_abierto"])
+    st.session_state["per_abierto"] = st.sidebar.toggle("Periodo abierto (Admin)", value=st.session_state["per_abierto"], key="per_abierto_tgl")
 else:
     st.sidebar.caption("Estado periodo: " + ("ABIERTO" if st.session_state["per_abierto"] else "CERRADO"))
 
-f_ini = st.sidebar.date_input("Desde:", value=date.today())
-f_fin = st.sidebar.date_input("Hasta:", value=date.today())
+f_ini = st.sidebar.date_input("Desde:", value=date.today(), key="f_ini_in")
+f_fin = st.sidebar.date_input("Hasta:", value=date.today(), key="f_fin_in")
 periodo_act = f"{f_ini.strftime('%Y-%m-%d')} al {f_fin.strftime('%Y-%m-%d')}"
 
-url_wa = st.sidebar.text_input("URL Custodios:", value="https://eit-toma-fisica-4wrzxgv3pgzfdr8agv9mtm.streamlit.app/").strip()
+url_wa = st.sidebar.text_input("URL Custodios:", value="https://eit-toma-fisica-4wrzxgv3pgzfdr8agv9mtm.streamlit.app/", key="url_wa_in").strip()
 if url_wa:
     msg_wa = f"CONTROL DE INVENTARIO EIT\n\nEnlace para registro de tomas físicas:\n{url_wa.splitlines()[0].strip()}"
     st.sidebar.markdown(
@@ -821,25 +797,30 @@ if url_wa:
         unsafe_allow_html=True,
     )
 
-if st.sidebar.button("Refrescar datos", use_container_width=True):
+if st.sidebar.button("Refrescar datos", use_container_width=True, key="btn_ref_top"):
     leer_gs.clear()
     cargar_pivot.clear()
     cargar_nac.clear()
     st.rerun()
 
-# Filtros globales en el panel izquierdo para Dashboard, Estadísticas y Exportación
 st.sidebar.markdown("---")
 st.sidebar.markdown("### Filtros de Análisis & Reportes")
-incluir_gs_rep = st.sidebar.checkbox("Incluir registros de Google Sheets", value=False)
+incluir_gs_rep = st.sidebar.checkbox("Incluir registros de Google Sheets", value=False, key="chk_inc_gs")
 df_base_rep = prep_df(datos_combinados(incluir_gs=incluir_gs_rep))
 muestreo_rep = "Muestreo" in tipo_proc
 
-f_per = st.sidebar.selectbox("Periodo:", ["TODOS"] + sorted([p for p in df_base_rep["Periodo"].unique() if p], reverse=True)) if not df_base_rep.empty else "TODOS"
-f_bod = st.sidebar.selectbox("Bodega:", ["TODAS"] + sorted([b for b in df_base_rep["Bodega"].unique() if b])) if not df_base_rep.empty else "TODAS"
-f_ciu = st.sidebar.selectbox("Ciudad:", ["TODAS"] + sorted([c for c in df_base_rep["Ciudad"].unique() if c])) if not df_base_rep.empty else "TODAS"
-f_cus = st.sidebar.selectbox("Custodio:", ["TODOS"] + sorted([c for c in df_base_rep["Correo_Usuario"].unique() if c])) if not df_base_rep.empty else "TODOS"
-f_sku = st.sidebar.text_input("COD_SKU:", value="").strip().upper()
-f_prv = st.sidebar.text_input("Proveedor:", value="").strip().upper()
+f_per = st.sidebar.selectbox("Periodo:", ["TODOS"] + sorted([p for p in df_base_rep["Periodo"].unique() if p], reverse=True), key="flt_per") if not df_base_rep.empty else "TODOS"
+f_bod = st.sidebar.selectbox("Bodega:", ["TODAS"] + sorted([b for b in df_base_rep["Bodega"].unique() if b]), key="flt_bod") if not df_base_rep.empty else "TODAS"
+f_ciu = st.sidebar.selectbox("Ciudad:", ["TODAS"] + sorted([c for c in df_base_rep["Ciudad"].unique() if c]), key="flt_ciu") if not df_base_rep.empty else "TODAS"
+f_cus = st.sidebar.selectbox("Custodio:", ["TODOS"] + sorted([c for c in df_base_rep["Correo_Usuario"].unique() if c]), key="flt_cus") if not df_base_rep.empty else "TODOS"
+f_sku = st.sidebar.text_input("COD_SKU:", value="", key="flt_sku").strip().upper()
+f_prv = st.sidebar.text_input("Proveedor:", value="", key="flt_prv").strip().upper()
+
+if st.sidebar.button("Refrescar estadísticas", use_container_width=True, key="btn_ref_stats_bottom"):
+    leer_gs.clear()
+    cargar_pivot.clear()
+    cargar_nac.clear()
+    st.rerun()
 
 df_rep = df_base_rep.copy()
 if not df_rep.empty:
@@ -877,11 +858,12 @@ if es_admin:
             file_name=f"reporte_toma_fisica_{datetime.now().strftime('%Y%m%d_%H%M%S')}.xlsx",
             mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
             use_container_width=True,
+            key="btn_dl_side",
         )
 
-    modo_dup_ui = st.sidebar.radio("Si hay duplicados en Google:", ["Omitir duplicados", "Sobrescribir", "Duplicar"])
+    modo_dup_ui = st.sidebar.radio("Si hay duplicados en Google:", ["Omitir duplicados", "Sobrescribir", "Duplicar"], key="modo_dup_in")
     modo_dup_map = {"Omitir duplicados": "omitir", "Sobrescribir": "sobreescribir", "Duplicar": "duplicar"}
-    if st.sidebar.button("Sincronizar JSON a Google", use_container_width=True):
+    if st.sidebar.button("Sincronizar JSON a Google", use_container_width=True, key="btn_sync_gs"):
         pend = cargar_json()
         if pend:
             con = {str(x.get("ID_Tx", "")).strip().upper() for x in leer_gs()} | ids_enviados()
@@ -949,7 +931,6 @@ with tab_op:
         if str(r.get("Periodo", "")).strip() == periodo_act and norm_bod(r.get("Bodega", "")) == bod_norm:
             ya_aud.add(str(r.get("COD_SKU", "")).strip().upper())
 
-    # 1) Filtra por Columna V (excluyendo "SIN MOV") y 2) revisa saldo > 0 en bodega activa
     skus_unicos, desc_map = obtener_skus_teoricos_bodega(nac_rows, dict_maestro, bod_norm, muestreo=muestreo)
     tot_teo_bod = len(skus_unicos)
     aud_bod_cnt = len([s for s in skus_unicos if s in ya_aud])
@@ -976,7 +957,7 @@ with tab_op:
     c6.write("")
     ok_rev = (cant >= 0) or bool(motivo)
     puede = st.session_state["per_abierto"] and bool(ubic) and ubic not in ["UBICACIÓN", "ESPECIFIQUE"] and bool(cod_sku) and (cant != 0) and ok_rev
-    btn_reg = c6.button("REGISTRAR", use_container_width=True, disabled=not puede)
+    btn_reg = c6.button("REGISTRAR", use_container_width=True, disabled=not puede, key="btn_reg_tx")
     st.markdown("</div>", unsafe_allow_html=True)
 
     st_teo, st_nac = 0.0, 0.0
@@ -1008,25 +989,13 @@ with tab_op:
             for r in regs_json
             if str(r.get("Periodo", "")).strip() == periodo_act and norm_bod(r.get("Bodega", "")) == bod_norm and str(r.get("COD_SKU", "")).strip().upper() == cod_sku
         )
-        c_unit_prev = next(
-            (num_es(v) for k, v in art.items() if any(t in k.upper() for t in ["COSTO", "PRECIO", "VAL_UNIT", "V_UNIT", "P_UNIT"]) and num_es(v) > 0),
-            0.0,
-        )
-        q_act_val = float(cant)
-        q_acum_calc = round(float(prev) + q_act_val, 4)
-        dif, est_vista, _, c_dif_vista = calcular_dif_estado_costo(q_acum_calc, st_teo, q_act_val, c_unit_prev)
+        q_acum_calc = round(float(prev) + float(cant), 4)
         st.info(
             f"**SKU:** {cod_sku} | **Desc:** {flex('DESCRIPCIÓN', 'DESCRIPCION', 'DESC')} | **Und:** {flex('UNIDAD', 'UND')} | **Prov:** {flex('PROVEEDOR', 'SUP', 'FABRICANTE')} | **Acumulado Q:** {q_acum_calc:g}"
         )
-        m1, m2, m3 = st.columns(3)
+        m1, m2 = st.columns(2)
         m1.markdown(f'<div class="saldo-box"><span class="saldo-lbl">QSA_Teorico ({bod_norm})</span><span class="saldo-val">{st_teo:g}</span></div>', unsafe_allow_html=True)
         m2.markdown(f'<div class="saldo-box"><span class="saldo-lbl">Nacional</span><span class="saldo-val">{st_nac:g}</span></div>', unsafe_allow_html=True)
-        if est_vista == "SOBRANTE":
-            m3.markdown(f'<div class="sob">SOBRANTE: {abs(dif):g} un.<br>USD {c_dif_vista:,.2f}</div>', unsafe_allow_html=True)
-        elif est_vista == "FALTANTE":
-            m3.markdown(f'<div class="fal">FALTANTE: {abs(dif):g} un.<br>USD {c_dif_vista:,.2f}</div>', unsafe_allow_html=True)
-        else:
-            m3.markdown('<div class="ok">CUADRADO (OK)<br>USD 0.00</div>', unsafe_allow_html=True)
 
     if btn_reg:
         art = dict_maestro.get(cod_sku, {})
@@ -1110,7 +1079,7 @@ with tab_dash:
         k5.metric("Impacto Dif. (USD)", f"${df_rep['COSTO DIF'].sum():,.2f}")
 
         st.markdown(
-            f"**Estados en filtro:** &nbsp; 🟢 **SOBRANTE:** `{sob_cnt}` &nbsp;|&nbsp; 🔴 **FALTANTE:** `{fal_cnt}` &nbsp;|&nbsp; 🟡 **CUADRADO (OK):** `{ok_cnt}`"
+            f"**Estados en filtro:** &nbsp; **SOBRANTE:** `{sob_cnt}` &nbsp;|&nbsp; **FALTANTE:** `{fal_cnt}` &nbsp;|&nbsp; **CUADRADO (OK):** `{ok_cnt}`"
         )
 
         st.markdown("---")
@@ -1166,10 +1135,11 @@ with tab_dash:
         st.markdown("---")
         st.markdown("#### Matriz de Avance por Bodega")
         if not df_bod_av.empty:
-            render_tabla_html_limpia(
+            render_tabla_segura(
                 df_bod_av,
                 ["Bodega", "SKU_Teoricos", "SKU_Contados", "SKU_Pendientes", "Avance_Pct", "Tx", "Cantidad_Q", "Sobrantes", "Faltantes", "Cuadrados", "Costo_Dif_USD"],
                 max_filas=20,
+                key_suf="matriz_bod",
             )
 
 with tab_exp:
@@ -1185,12 +1155,10 @@ with tab_exp:
             file_name=f"TomaFisica_V7gPro_{datetime.now().strftime('%Y%m%d_%H%M%S')}.xlsx",
             mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
             use_container_width=True,
+            key="btn_dl_tab",
         )
-        render_tabla_html_limpia(df_rep.iloc[::-1], COLS_REP, max_filas=50)
+        render_tabla_segura(df_rep.iloc[::-1], COLS_REP, max_filas=50, key_suf="detalle_rep")
 
-    # ==========================================================================
-    # REPORTE DE LOGS -> PESTAÑA Logs_UI (COLUMNAS A:C -> Timestamp, Usuario, Error_UI)
-    # ==========================================================================
     st.markdown("---")
     st.markdown(f"### Reporte de LOGS (`{PESTANA_LOGS_GS}` -> Columnas `A:C`)")
     st.caption("Registra incidencias reales con hora (`Timestamp`), `Usuario` y `Error_UI` para enviarlas a la pestaña `Logs_UI` del libro de Toma Física.")
@@ -1199,16 +1167,22 @@ with tab_exp:
     pend_logs = [lg for lg in logs_act if str(lg.get("Enviado_GS", "NO")).upper() != "SI"]
 
     lcol1, lcol2, lcol3 = st.columns([1.6, 1.4, 2])
-    if lcol1.button(f"Enviar a {PESTANA_LOGS_GS} ({len(pend_logs)})", use_container_width=True, disabled=len(pend_logs) == 0):
-        ok_cnt_l, tot_cnt_l = enviar_logs_a_gs(pend_logs)
-        guardar_logs_lista(logs_act)
-        st.success(f"Enviados a {PESTANA_LOGS_GS}: {ok_cnt_l}/{tot_cnt_l} registros.")
-        st.rerun()
+    if lcol1.button(f"Enviar a {PESTANA_LOGS_GS} ({len(pend_logs)})", use_container_width=True, key="btn_send_logs"):
+        if pend_logs:
+            ok_cnt_l, tot_cnt_l = enviar_logs_a_gs(pend_logs)
+            guardar_logs_lista(logs_act)
+            st.success(f"Enviados a {PESTANA_LOGS_GS}: {ok_cnt_l}/{tot_cnt_l} registros.")
+            st.rerun()
+        else:
+            st.info(f"No hay logs pendientes por enviar a {PESTANA_LOGS_GS}.")
 
-    if lcol2.button("Limpiar LOGS locales", use_container_width=True, disabled=len(logs_act) == 0):
-        guardar_logs_lista([])
-        st.success("Historial de LOGS locales limpiado.")
-        st.rerun()
+    if lcol2.button("Limpiar LOGS locales", use_container_width=True, key="btn_clear_logs"):
+        if logs_act:
+            guardar_logs_lista([])
+            st.success("Historial de LOGS locales limpiado.")
+            st.rerun()
+        else:
+            st.info("No hay logs locales para limpiar.")
 
     lcol3.caption(f"Pestaña destino: `{PESTANA_LOGS_GS}` (`A:C`) | Total: `{len(logs_act)}` | Pendientes: `{len(pend_logs)}`")
 
@@ -1217,6 +1191,6 @@ with tab_exp:
         for c_l in COLS_LOG_UI:
             if c_l not in df_logs.columns:
                 df_logs[c_l] = ""
-        render_tabla_html_limpia(df_logs, COLS_LOG_UI, max_filas=40)
+        render_tabla_segura(df_logs, COLS_LOG_UI, max_filas=40, key_suf="logs_ui")
     else:
         st.info("Sin errores registrados en este momento.")
