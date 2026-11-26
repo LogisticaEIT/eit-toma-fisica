@@ -79,6 +79,12 @@ st.session_state["errores_ui"] = []
 st.session_state.setdefault("cap_v", 0)
 st.session_state.setdefault("mem_regs", [])
 st.session_state.setdefault("pin_reverso_act", "7031")
+st.session_state.setdefault("cola_etiquetas", [])
+st.session_state.setdefault("cod_label_act", "LBL-EIT-A4")
+
+
+def norm_mayus_limpio(v):
+    return " ".join(str(v or "").strip().upper().split())
 
 
 def resolver_ruta(win_path, rel_name):
@@ -132,8 +138,86 @@ COLS_REP = [
 COLS_LOG_UI = ["Timestamp", "Usuario", "Error_UI", "Enviado_GS"]
 
 
-def generar_pin_tx(tx_ref, pin_base="7031"):
-    raw = f"{str(pin_base).strip()}|{str(tx_ref).strip().upper()}".encode("utf-8")
+def norm_bod(v):
+    if v is None:
+        return ""
+    s = str(v).strip().lstrip("'").replace(".0", "")
+    return s.zfill(2) if s.isdigit() else s.upper()
+
+
+def agregar_etiqueta_cola(sku, desc="", bod="", ubic="", usuario_lbl="", copias=1):
+    sku_n = norm_mayus_limpio(sku)
+    if not sku_n:
+        return
+    n_cop = max(1, min(int(copias or 1), 60))
+    st.session_state.setdefault("cola_etiquetas", [])
+    fecha_hoy = date.today().strftime("%Y-%m-%d")
+    login_corto = str(usuario_lbl or st.session_state.get("usr_act", "")).split("@")[0].upper()[:14]
+    for _ in range(n_cop):
+        st.session_state["cola_etiquetas"].append({
+            "COD_SKU": sku_n,
+            "DESCRIPCION": norm_mayus_limpio(desc)[:38],
+            "FECHA_LOGIN": f"{fecha_hoy} | {login_corto}".strip(" |"),
+            "BODEGA": norm_bod(bod),
+            "UBICACION": norm_mayus_limpio(ubic),
+        })
+
+
+def render_hoja_a4_etiquetas(cola, cod_label="LBL-EIT-A4", ancho_mm=58, alto_mm=25):
+    if not cola:
+        st.info("Aún no hay etiquetas marcadas en la cola.")
+        return
+    por_hoja = 33
+    total_hojas = max(1, math.ceil(len(cola) / por_hoja))
+    bloques_html = []
+    for h_idx in range(total_hojas):
+        sub = cola[h_idx * por_hoja : (h_idx + 1) * por_hoja]
+        celdas = []
+        for it in sub:
+            s_sku = html.escape(norm_mayus_limpio(it.get("COD_SKU", "")))
+            s_desc = html.escape(norm_mayus_limpio(it.get("DESCRIPCION", ""))[:36])
+            s_fl = html.escape(norm_mayus_limpio(it.get("FECHA_LOGIN", ""))[:26])
+            celdas.append(
+                f'<div style="width:{ancho_mm}mm;height:{alto_mm}mm;border:1px dashed #334155;box-sizing:border-box;'
+                f'padding:1.5mm 2mm;display:flex;flex-direction:column;justify-content:space-between;background:#FFFFFF;overflow:hidden;">'
+                f'<div style="font-size:9.5pt;font-weight:900;letter-spacing:0.4px;color:#0F172A;line-height:1.1;">{s_sku}</div>'
+                f'<div style="font-size:6.5pt;font-weight:700;color:#1E293B;line-height:1.15;max-height:7mm;overflow:hidden;">{s_desc}</div>'
+                f'<div style="font-size:6pt;font-weight:700;color:#475569;line-height:1.05;">{s_fl}</div>'
+                f'</div>'
+            )
+        bloques_html.append(
+            f'<div class="hoja-a4" style="width:210mm;min-height:297mm;padding:10mm 11mm;box-sizing:border-box;'
+            f'background:#FFFFFF;border:1px solid #94A3B8;margin:0 auto 14px auto;display:grid;'
+            f'grid-template-columns:repeat(3, {ancho_mm}mm);grid-auto-rows:{alto_mm}mm;gap:2mm 3mm;align-content:start;">'
+            + "".join(celdas)
+            + '</div>'
+        )
+
+    html_doc = f"""
+    <div>
+      <div style="margin-bottom:10px;display:flex;gap:10px;align-items:center;">
+        <button onclick="window.print()" type="button" style="padding:8px 14px;background:#0F172A;color:#FFFFFF;border:none;border-radius:6px;font-weight:700;cursor:pointer;">
+          Imprimir Hoja A4 ({len(cola)} etiquetas / {total_hojas} hoja(s))
+        </button>
+        <span style="font-size:12px;color:#334155;font-weight:700;">COD_LABEL: {html.escape(cod_label)} • A4 • ~{ancho_mm}×{alto_mm} mm • COD_SKU / DESCRIPCIÓN / FECHA-LOGIN</span>
+      </div>
+      <style>
+        @media print {{
+          body * {{ visibility: hidden; }}
+          .hoja-a4, .hoja-a4 * {{ visibility: visible; }}
+          .hoja-a4 {{ position: relative; border: none !important; margin: 0 !important; page-break-after: always; }}
+          button {{ display: none !important; }}
+        }}
+      </style>
+      {''.join(bloques_html)}
+    </div>
+    """
+    components.html(html_doc, height=540, scrolling=True)
+
+
+def generar_pin_diario(pin_base="7031", fecha_ref=None):
+    f_str = (fecha_ref or date.today()).strftime("%Y-%m-%d")
+    raw = f"{str(pin_base).strip()}|DIA|{f_str}".encode("utf-8")
     dig = int(hashlib.sha256(raw).hexdigest()[:6], 16) % 10000
     return f"{dig:04d}"
 
@@ -215,13 +299,6 @@ def enviar_logs_a_gs(logs_pendientes):
         except Exception:
             pass
     return enviados_ok, intentos
-
-
-def norm_bod(v):
-    if v is None:
-        return ""
-    s = str(v).strip().lstrip("'").replace(".0", "")
-    return s.zfill(2) if s.isdigit() else s.upper()
 
 
 def norm_est(v):
@@ -319,7 +396,7 @@ def calcular_dif_estado_costo(q_acum, st_teo, q_actual, c_unit, est_rev="NO_APLI
 
 
 def fmt_txt(v):
-    s = str(v or "").strip()
+    s = norm_mayus_limpio(v)
     return f"'{s}" if s and not s.startswith("'") else s
 
 
@@ -334,10 +411,10 @@ def cargar_json():
         except Exception as e:
             log_err(f"JSON leer: {e}", origen="JSON")
     if isinstance(st.session_state.get("mem_regs"), list):
-        vistos = {str(x.get("ID_Tx", "")).strip().upper() for x in regs if isinstance(x, dict) and x.get("ID_Tx")}
+        vistos = {norm_mayus_limpio(x.get("ID_Tx", "")) for x in regs if isinstance(x, dict) and x.get("ID_Tx")}
         for r in st.session_state["mem_regs"]:
             if isinstance(r, dict):
-                tx = str(r.get("ID_Tx", "")).strip().upper()
+                tx = norm_mayus_limpio(r.get("ID_Tx", ""))
                 if not tx or tx not in vistos:
                     regs.append(r)
                     if tx:
@@ -372,7 +449,7 @@ def _recalcular_lista_sku(lst, per_s, bod_s, sku_s, st_teo_k):
         if (
             str(r.get("Periodo", "")).strip() == per_s
             and norm_bod(r.get("Bodega", "")) == bod_s
-            and str(r.get("COD_SKU", "")).strip().upper() == sku_s
+            and norm_mayus_limpio(r.get("COD_SKU", "")) == sku_s
             and es_computable_en_consolidado(r)
         ):
             q_comp = round(q_comp + num_es(r.get("Q", 0), max_abs=1e12), 4)
@@ -393,11 +470,13 @@ def _recalcular_lista_sku(lst, per_s, bod_s, sku_s, st_teo_k):
         if (
             str(r.get("Periodo", "")).strip() == per_s
             and norm_bod(r.get("Bodega", "")) == bod_s
-            and str(r.get("COD_SKU", "")).strip().upper() == sku_s
+            and norm_mayus_limpio(r.get("COD_SKU", "")) == sku_s
         ):
             q_r = num_es(r.get("Q", 0), max_abs=1e12)
             er_r = norm_estado_rev(r.get("Estado_Reverso", ""), q_r)
             cu = limpiar_costo_unit(r.get("COSTO UNITARIO", 0))
+            r["COD_SKU"] = sku_s
+            r["Ubicacion"] = norm_mayus_limpio(r.get("Ubicacion", ""))
             r["Estado_Reverso"] = er_r
             r["QSA_Teorico"] = float(st_teo_k)
             r["COSTO UNITARIO"] = cu
@@ -423,7 +502,7 @@ def _recalcular_lista_sku(lst, per_s, bod_s, sku_s, st_teo_k):
 def consolidar_estado_sku_en_json(periodo_k, bod_k, sku_k, st_teo_k):
     per_s = str(periodo_k or "").strip()
     bod_s = norm_bod(bod_k)
-    sku_s = str(sku_k or "").strip().upper()
+    sku_s = norm_mayus_limpio(sku_k)
     if not per_s or not bod_s or not sku_s:
         return 0.0, 0.0, "CUADRADO (OK)"
 
@@ -446,7 +525,7 @@ def consolidar_estado_sku_en_json(periodo_k, bod_k, sku_k, st_teo_k):
 
 
 def resolver_reverso_pendiente(tx_id, aprobar=True, admin_usr=""):
-    tx_s = str(tx_id or "").strip().upper()
+    tx_s = norm_mayus_limpio(tx_id)
     if not tx_s:
         return False, None
     nuevo_est_rev = "APROBADO" if aprobar else "RECHAZADO"
@@ -456,7 +535,7 @@ def resolver_reverso_pendiente(tx_id, aprobar=True, admin_usr=""):
         nonlocal reg_afectado
         toc = False
         for r in lst:
-            if str(r.get("ID_Tx", "")).strip().upper() == tx_s:
+            if norm_mayus_limpio(r.get("ID_Tx", "")) == tx_s:
                 r["Estado_Reverso"] = nuevo_est_rev
                 mot_prev = str(r.get("Motivo", "")).strip()
                 nota = f"[REV {nuevo_est_rev} por {admin_usr} {datetime.now().strftime('%Y-%m-%d %H:%M')}]"
@@ -486,7 +565,7 @@ def resolver_reverso_pendiente(tx_id, aprobar=True, admin_usr=""):
             num_es(reg_afectado.get("QSA_Teorico", 0), max_abs=1e12),
         )
         for r in cargar_json():
-            if str(r.get("ID_Tx", "")).strip().upper() == tx_s:
+            if norm_mayus_limpio(r.get("ID_Tx", "")) == tx_s:
                 reg_afectado = dict(r)
                 break
         return True, reg_afectado
@@ -519,14 +598,14 @@ def ids_enviados():
             with open(enviados_path, "r", encoding="utf-8") as f:
                 d = json.load(f)
                 if isinstance(d, list):
-                    return {str(x).strip().upper() for x in d if str(x).strip()}
+                    return {norm_mayus_limpio(x) for x in d if norm_mayus_limpio(x)}
         except Exception:
             pass
     return set()
 
 
 def marcar_enviado(tx_id):
-    t = str(tx_id or "").strip().upper()
+    t = norm_mayus_limpio(tx_id)
     if not t:
         return
     s = ids_enviados()
@@ -583,10 +662,13 @@ def armar_payload_gs(reg, tx_id):
     mot_txt = str(reg.get("Motivo", "") or "").strip()
     if q_v < 0 and er_v not in ["", "NO_APLICA"]:
         mot_txt = f"[{er_v}] {mot_txt}".strip()
+    bod_n = norm_bod(reg.get("Bodega", ""))
+    sku_n = norm_mayus_limpio(reg.get("COD_SKU", ""))
+    ubic_n = norm_mayus_limpio(reg.get("Ubicacion", ""))
     return [
         reg.get("Periodo", ""), tx_id, reg.get("Timestamp", ""), reg.get("Correo_Usuario", ""),
-        reg.get("Ciudad", ""), fmt_txt(norm_bod(reg.get("Bodega", ""))), reg.get("Ubicacion", ""),
-        fmt_txt(reg.get("COD_SKU", "")), q_v, reg.get("BOD/SKU", ""), mot_txt,
+        reg.get("Ciudad", ""), fmt_txt(bod_n), ubic_n,
+        fmt_txt(sku_n), q_v, f"{bod_n}-{sku_n}", mot_txt,
         reg.get("LINEA DE INVENTARIO", ""), reg.get("PROVEEDOR", ""), fmt_txt(reg.get("ALTERNO", "")),
         reg.get("DESCRIPCIÓN", ""), reg.get("UNIDAD", ""), dif_v, est_v,
         cu, ct_v, cd_v, num_es(reg.get("QSA_Teorico", 0)),
@@ -594,9 +676,9 @@ def armar_payload_gs(reg, tx_id):
 
 
 def enviar_gs(reg, conocidos=None, modo_dup="omitir"):
-    tx = str(reg.get("ID_Tx", "")).strip().upper()
+    tx = norm_mayus_limpio(reg.get("ID_Tx", ""))
     if conocidos is None:
-        conocidos = {str(x.get("ID_Tx", "")).strip().upper() for x in leer_gs()} | ids_enviados()
+        conocidos = {norm_mayus_limpio(x.get("ID_Tx", "")) for x in leer_gs()} | ids_enviados()
     tx_env = tx
     if tx and tx in conocidos:
         if modo_dup == "omitir":
@@ -636,8 +718,8 @@ def datos_combinados(incluir_gs=False):
     for r in loc + rem:
         if not isinstance(r, dict):
             continue
-        tx = str(r.get("ID_Tx", "")).strip().upper()
-        k = tx if tx else f"{r.get('Timestamp','')}|{norm_bod(r.get('Bodega',''))}|{str(r.get('COD_SKU','')).strip().upper()}|{num_es(r.get('Q',0))}"
+        tx = norm_mayus_limpio(r.get("ID_Tx", ""))
+        k = tx if tx else f"{r.get('Timestamp','')}|{norm_bod(r.get('Bodega',''))}|{norm_mayus_limpio(r.get('COD_SKU',''))}|{num_es(r.get('Q',0))}"
         if k not in vistos:
             vistos.add(k)
             res.append(r)
@@ -652,11 +734,12 @@ def prep_df(regs):
         if c not in df.columns:
             df[c] = ""
     df["Bodega"] = df["Bodega"].apply(norm_bod)
-    df["Ciudad"] = df["Ciudad"].astype(str).str.strip().str.upper()
+    df["Ubicacion"] = df["Ubicacion"].apply(norm_mayus_limpio)
+    df["Ciudad"] = df["Ciudad"].apply(norm_mayus_limpio)
     df["Periodo"] = df["Periodo"].astype(str).str.strip()
     df["Correo_Usuario"] = df["Correo_Usuario"].astype(str).str.strip().str.lower()
-    df["COD_SKU"] = df["COD_SKU"].astype(str).str.strip().str.upper()
-    df["PROVEEDOR"] = df["PROVEEDOR"].astype(str).str.strip().str.upper()
+    df["COD_SKU"] = df["COD_SKU"].apply(norm_mayus_limpio)
+    df["PROVEEDOR"] = df["PROVEEDOR"].apply(norm_mayus_limpio)
     df["ESTADO"] = df["ESTADO"].apply(norm_est)
     for nc in ["Q", "QSA_Teorico", "DIFERENCIA"]:
         df[nc] = df[nc].apply(lambda x: num_es(x, max_abs=1e12))
@@ -703,7 +786,7 @@ def resolver_col_bodega(nac_rows, bod):
 def sku_habilitado_col_v(row, muestreo=True):
     if not muestreo:
         return True
-    val_v = str(row[IDX_COL_V] or "").strip().upper() if IDX_COL_V < len(row) else ""
+    val_v = norm_mayus_limpio(row[IDX_COL_V]) if IDX_COL_V < len(row) else ""
     if not val_v or val_v in ["SIN MOV", "SIN_MOV", "NONE", "NAN", "0"]:
         return False
     return True
@@ -724,7 +807,7 @@ def obtener_skus_teoricos_bodega(nac_rows, dict_maestro, bod, muestreo=True):
     for row in nac_rows[1:]:
         if not row or len(row) == 0 or row[0] is None:
             continue
-        sv = str(row[0]).strip().upper()
+        sv = norm_mayus_limpio(row[0])
         if not sv or sv in ["NONE", "NAN"]:
             continue
         if not sku_habilitado_col_v(row, muestreo=muestreo):
@@ -786,36 +869,209 @@ def construir_resumen_bodega(df, nac_rows, muestreo=True, bodega_filtro="TODAS")
     return pd.DataFrame(filas)
 
 
+def render_grafica_control_y_matriz(df_src, titulo="Control de Tomas & Proyección (Q(PRY) / LCS / x / cT / LCI)"):
+    st.markdown(f"#### {titulo}")
+    if df_src is None or df_src.empty:
+        st.info("Sin datos para graficar control y matriz.")
+        return
+
+    df_ord = df_src.sort_values("Timestamp").reset_index(drop=True).tail(12).copy()
+    etiquetas = [f"{i + 1}" for i in range(len(df_ord))]
+    ct_vals = [round(float(x), 2) for x in df_ord["Q"].tolist()]
+    media_x = round(sum(ct_vals) / len(ct_vals), 2) if ct_vals else 0.0
+    max_q = max(ct_vals) if ct_vals else 0.0
+    lcs_val = round(max(media_x * 2.0, max_q * 1.1, 30.0), 2)
+    lci_val = 0.0
+
+    q_pry_vals = [None] * len(ct_vals)
+    for idx_p in range(max(0, len(ct_vals) - 3), len(ct_vals)):
+        q_pry_vals[idx_p] = round(max_q + (idx_p + 1) * 5.0, 2)
+
+    fig_html = f"""
+    <div style="background:#FFFFFF;border:1px solid #CBD5E1;border-radius:8px;padding:10px;overflow-x:auto;">
+      <canvas id="canvasControlV7" width="860" height="250"></canvas>
+      <table style="width:100%;border-collapse:collapse;margin-top:6px;font-size:12px;">
+        <thead>
+          <tr style="background:#F1F5F9;">
+            <th style="border:1px solid #CBD5E1;padding:4px 6px;text-align:left;">Serie</th>
+            {''.join(f'<th style="border:1px solid #CBD5E1;padding:4px 6px;text-align:center;">{e}</th>' for e in etiquetas)}
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td style="border:1px solid #CBD5E1;padding:4px 6px;font-weight:700;"><span style="display:inline-block;width:12px;height:10px;background:#F59E0B;margin-right:4px;"></span>Q(PRY)</td>
+            {''.join(f'<td style="border:1px solid #CBD5E1;padding:4px 6px;text-align:center;font-weight:700;">{"" if v is None else f"{v:g}"}</td>' for v in q_pry_vals)}
+          </tr>
+          <tr>
+            <td style="border:1px solid #CBD5E1;padding:4px 6px;font-weight:700;color:#2563EB;">● LCS</td>
+            {''.join(f'<td style="border:1px solid #CBD5E1;padding:4px 6px;text-align:center;">{lcs_val:g}</td>' for _ in etiquetas)}
+          </tr>
+          <tr>
+            <td style="border:1px solid #CBD5E1;padding:4px 6px;font-weight:700;color:#EA580C;">● x</td>
+            {''.join(f'<td style="border:1px solid #CBD5E1;padding:4px 6px;text-align:center;">{media_x:g}</td>' for _ in etiquetas)}
+          </tr>
+          <tr>
+            <td style="border:1px solid #CBD5E1;padding:4px 6px;font-weight:700;color:#64748B;">● cT</td>
+            {''.join(f'<td style="border:1px solid #CBD5E1;padding:4px 6px;text-align:center;">{v:g}</td>' for v in ct_vals)}
+          </tr>
+          <tr>
+            <td style="border:1px solid #CBD5E1;padding:4px 6px;font-weight:700;color:#1D4ED8;">● LCI</td>
+            {''.join(f'<td style="border:1px solid #CBD5E1;padding:4px 6px;text-align:center;">{lci_val:g}</td>' for _ in etiquetas)}
+          </tr>
+        </tbody>
+      </table>
+    </div>
+    <script>
+    (function() {{
+      const cv = document.getElementById("canvasControlV7");
+      if (!cv) return;
+      const ctx = cv.getContext("2d");
+      const labels = {json.dumps(etiquetas)};
+      const ct = {json.dumps(ct_vals)};
+      const qpry = {json.dumps(q_pry_vals)};
+      const lcs = labels.map(() => {lcs_val});
+      const xmed = labels.map(() => {media_x});
+      const lci = labels.map(() => {lci_val});
+
+      const padL = 45, padR = 45, padT = 20, padB = 28;
+      const w = cv.width - padL - padR;
+      const h = cv.height - padT - padB;
+      const allNums = ct.concat(lcs, xmed, lci).concat(qpry.filter(v => v !== null));
+      const yMax = Math.max(10, ...allNums) * 1.12;
+
+      ctx.clearRect(0, 0, cv.width, cv.height);
+      ctx.strokeStyle = "#E2E8F0";
+      ctx.lineWidth = 1;
+      for (let g = 0; g <= 5; g++) {{
+        const y = padT + h - (g / 5) * h;
+        ctx.beginPath(); ctx.moveTo(padL, y); ctx.lineTo(padL + w, y); ctx.stroke();
+        ctx.fillStyle = "#475569"; ctx.font = "11px sans-serif";
+        ctx.fillText(Math.round((g / 5) * yMax), 6, y + 4);
+      }}
+
+      const stepX = w / Math.max(1, labels.length);
+      labels.forEach((lbl, i) => {{
+        const cx = padL + i * stepX + stepX / 2;
+        ctx.fillStyle = "#334155"; ctx.font = "11px sans-serif"; ctx.textAlign = "center";
+        ctx.fillText(lbl, cx, cv.height - 8);
+        if (qpry[i] !== null && qpry[i] !== undefined) {{
+          const bh = (qpry[i] / yMax) * h;
+          const bw = Math.min(28, stepX * 0.45);
+          ctx.fillStyle = "#F59E0B";
+          ctx.fillRect(cx - bw / 2, padT + h - bh, bw, bh);
+          ctx.fillStyle = "#991B1B"; ctx.font = "bold 11px sans-serif";
+          ctx.fillText(String(qpry[i]), cx, padT + h - bh - 4);
+        }}
+      }});
+
+      function drawLine(arr, color) {{
+        ctx.strokeStyle = color; ctx.lineWidth = 2; ctx.fillStyle = color;
+        ctx.beginPath();
+        arr.forEach((v, i) => {{
+          const x = padL + i * stepX + stepX / 2;
+          const y = padT + h - (Number(v || 0) / yMax) * h;
+          if (i === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
+        }});
+        ctx.stroke();
+        arr.forEach((v, i) => {{
+          const x = padL + i * stepX + stepX / 2;
+          const y = padT + h - (Number(v || 0) / yMax) * h;
+          ctx.beginPath(); ctx.arc(x, y, 3.5, 0, Math.PI * 2); ctx.fill();
+        }});
+      }}
+
+      drawLine(lcs, "#2563EB");
+      drawLine(xmed, "#EA580C");
+      drawLine(ct, "#64748B");
+      drawLine(lci, "#1D4ED8");
+    }})();
+    </script>
+    """
+    components.html(fig_html, height=420, scrolling=True)
+
+
+def render_barras_peso_inventario(df_src, titulo="Peso Inventario vs. Peso Costo vs. Neumática"):
+    st.markdown(f"#### {titulo}")
+    if df_src is None or df_src.empty:
+        st.info("Sin datos para calcular pesos porcentuales.")
+        return
+
+    grp = df_src.groupby("COD_SKU", as_index=False).agg(
+        Q_TOT=("Q", "sum"),
+        COSTO_TOT=("COSTO TOTAL", "sum"),
+        LINEA=("LINEA DE INVENTARIO", "first"),
+    ).head(8)
+
+    sum_q = float(grp["Q_TOT"].sum()) or 1.0
+    sum_c = float(grp["COSTO_TOT"].sum()) or 1.0
+    neum_df = grp[grp["LINEA"].astype(str).str.upper().str.contains("NEUM")]
+    sum_n = float(neum_df["Q_TOT"].sum()) or 1.0
+
+    rows_html = []
+    for r in grp.to_dict(orient="records"):
+        p_inv = min(100.0, max(0.0, (float(r["Q_TOT"]) / sum_q) * 100.0))
+        p_cos = min(100.0, max(0.0, (float(r["COSTO_TOT"]) / sum_c) * 100.0))
+        es_neum = "NEUM" in str(r.get("LINEA", "")).upper()
+        p_neu = min(100.0, max(0.0, (float(r["Q_TOT"]) / sum_n) * 100.0)) if es_neum else 0.0
+
+        def barra(pct, grad, borde, texto):
+            return (
+                f'<div style="position:relative;width:100%;height:20px;background:#F8FAFC;border:1px solid #E2E8F0;overflow:hidden;">'
+                f'<div style="width:{pct:.1f}%;height:100%;background:{grad};border-right:1px solid {borde};"></div>'
+                f'<span style="position:absolute;right:6px;top:1px;font-size:11px;font-weight:800;color:#0F172A;">{texto}</span>'
+                f'</div>'
+            )
+
+        rows_html.append(
+            f'<tr style="border-bottom:1px solid #EA580C;">'
+            f'<td style="padding:4px 6px;font-weight:700;font-size:12px;">{html.escape(str(r["COD_SKU"]))}</td>'
+            f'<td style="padding:4px;">{barra(p_inv, "linear-gradient(90deg,#86EFAC,#16A34A)", "#15803D", f"{p_inv:.0f}%")}</td>'
+            f'<td style="padding:4px;">{barra(p_cos, "linear-gradient(90deg,#DBEAFE,#2563EB)", "#1D4ED8", f"{p_cos:.0f}%")}</td>'
+            f'<td style="padding:4px;">{barra(p_neu, "linear-gradient(90deg,#FFEDD5,#EA580C)", "#C2410C", f"{p_neu:.0f}%" if es_neum else "")}</td>'
+            f'</tr>'
+        )
+
+    tabla_peso = f"""
+    <div style="background:#FFFFFF;border:1px solid #CBD5E1;border-radius:8px;padding:8px;overflow-x:auto;">
+      <table style="width:100%;border-collapse:collapse;">
+        <thead>
+          <tr style="background:#EA580C;color:#FFFFFF;font-size:12px;">
+            <th style="padding:6px;text-align:left;">COD_SKU</th>
+            <th style="padding:6px;text-align:center;">PESO INV</th>
+            <th style="padding:6px;text-align:center;">PESO COSTO INV</th>
+            <th style="padding:6px;text-align:center;">NEUMÁTICA</th>
+          </tr>
+        </thead>
+        <tbody>
+          {''.join(rows_html)}
+          <tr style="background:#E2E8F0;font-weight:800;font-size:12px;">
+            <td style="padding:6px;">TOTAL</td>
+            <td style="padding:6px;text-align:center;">100%</td>
+            <td style="padding:6px;text-align:center;">100%</td>
+            <td style="padding:6px;text-align:center;">100%</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+    """
+    components.html(tabla_peso, height=320, scrolling=True)
+
+
 def render_graficos_tomas_y_auditoria(df_of, df_bod_av):
     st.markdown("#### Gráficos Visuales: Auditado vs. Por Auditar y Evolución de Tomas")
-    cg1, cg2 = st.columns(2)
+    if df_bod_av is not None and not df_bod_av.empty:
+        render_lista_visual(df_bod_av, "Bodega", ["SKU_Contados", "SKU_Pendientes", "Avance_Pct"], "Auditado vs. Por Auditar por Bodega")
+    if df_of is not None and not df_of.empty:
+        df_t = df_of.sort_values("Timestamp").reset_index(drop=True).tail(15).copy()
+        df_t["Toma_Etq"] = [f"Toma {i + 1} ({s})" for i, s in enumerate(df_t["COD_SKU"].tolist())]
+        tot_q = float(df_t["Q"].sum())
+        df_t["Pct_Acum"] = ((df_t["Q"].cumsum() / tot_q) * 100.0).round(1) if tot_q != 0 else 0.0
+        render_lista_visual(df_t, "Toma_Etq", ["Q", "Pct_Acum"], "Evolución de Tomas y % Acumulado")
 
-    with cg1:
-        st.markdown("**Auditado vs. Por Auditar por Bodega (SKUs)**")
-        if df_bod_av is not None and not df_bod_av.empty:
-            df_bar_aud = df_bod_av.set_index("Bodega")[["SKU_Contados", "SKU_Pendientes"]]
-            df_bar_aud.columns = ["Auditado (SKUs)", "Por Auditar (SKUs)"]
-            st.bar_chart(df_bar_aud, height=250)
-        else:
-            st.info("Sin datos de bodega para graficar.")
-
-    with cg2:
-        st.markdown("**Evolución de Tomas y % Acumulado (1.ª, 2.ª, 3.ª toma...)**")
-        if df_of is not None and not df_of.empty:
-            df_t = df_of.sort_values("Timestamp").reset_index(drop=True)
-            df_t["Toma"] = [f"Toma {i + 1}" for i in range(len(df_t))]
-            df_t["Cant_Toma"] = df_t["Q"].astype(float)
-            tot_q = float(df_t["Cant_Toma"].sum())
-            if tot_q != 0:
-                df_t["Pct_Toma"] = ((df_t["Cant_Toma"] / tot_q) * 100.0).round(2)
-                df_t["Pct_Acum"] = ((df_t["Cant_Toma"].cumsum() / tot_q) * 100.0).round(2)
-            else:
-                df_t["Pct_Toma"] = 0.0
-                df_t["Pct_Acum"] = 0.0
-            st.line_chart(df_t.set_index("Toma")[["Cant_Toma", "Pct_Acum"]], height=250)
-            st.caption(f"Total acumulado en tomas: **{tot_q:g}** (= 100% en última toma) | Última toma: **{df_t['Pct_Acum'].iloc[-1]:.1f}%** acumulado.")
-        else:
-            st.info("Sin tomas computables para graficar.")
+    st.divider()
+    render_grafica_control_y_matriz(df_of)
+    st.divider()
+    render_barras_peso_inventario(df_of)
 
 
 def render_lista_visual(df_plot, label_col, val_cols, titulo=""):
@@ -987,7 +1243,7 @@ def excel_bytes(df, nac_rows=None, muestreo=True):
             if cname in {"Bodega", "COD_SKU", "ALTERNO", "ID_Tx", "Ubicacion"}:
                 c.number_format = "@"
                 if c.value is not None:
-                    c.value = str(c.value)
+                    c.value = norm_mayus_limpio(c.value)
             elif cname == "COSTO UNITARIO":
                 c.number_format = "#,##0.0000"
             elif cname in {"COSTO TOTAL", "COSTO DIF", "Q", "QSA_Teorico", "DIFERENCIA"}:
@@ -1036,13 +1292,13 @@ def cargar_pivot(p):
         for sh in wb.sheetnames:
             rows = list(wb[sh].iter_rows(values_only=True))
             for idx_r, r_try in enumerate(rows[:6]):
-                cand = [str(c).strip().upper() if c is not None else "" for c in r_try]
+                cand = [norm_mayus_limpio(c) if c is not None else "" for c in r_try]
                 if any("SKU" in h or "COD" in h or "ART" in h for h in cand):
                     ck = next((i for i, h in enumerate(cand) if "SKU" in h or "COD" in h or "ART" in h), None)
                     if ck is not None:
                         for row in rows[idx_r + 1:]:
                             if len(row) > ck and row[ck] is not None:
-                                sv = str(row[ck]).strip().upper()
+                                sv = norm_mayus_limpio(row[ck])
                                 if sv and sv not in ["NONE", "NAN"]:
                                     dm.setdefault(sv, {})
                                     for i, val in enumerate(row):
@@ -1098,13 +1354,15 @@ bod_norm = norm_bod(st.sidebar.radio("Bodega:", bods_perm, key="bod_act", on_cha
 ciudades = ["Quito"] if bod_norm in ["01", "05", "5V"] else (["Guayaquil"] if bod_norm in ["03", "3V"] else (["Cuenca"] if bod_norm == "04" else ["Quito", "Guayaquil", "Cuenca", "Otras"]))
 ciudad_def = ciudades[0].upper()
 
+# Periodo de auditoría INHABILITADO por defecto
 if "per_abierto" not in st.session_state:
-    st.session_state["per_abierto"] = True
+    st.session_state["per_abierto"] = False
 if es_admin:
-    st.session_state["per_abierto"] = st.sidebar.toggle("Periodo abierto (Admin)", value=st.session_state["per_abierto"], key="per_abierto_tgl")
+    st.session_state["per_abierto"] = st.sidebar.toggle("Habilitar periodo de auditoría (Admin)", value=st.session_state["per_abierto"], key="per_abierto_tgl")
     st.session_state["pin_reverso_act"] = st.sidebar.text_input("PIN Base Reversos (Admin):", value=st.session_state["pin_reverso_act"], key="pin_rev_admin_in").strip()
+    st.session_state["cod_label_act"] = norm_mayus_limpio(st.sidebar.text_input("COD_LABEL Etiqueta:", value=st.session_state["cod_label_act"], key="cod_lbl_admin_in")) or "LBL-EIT-A4"
 else:
-    st.sidebar.caption("Estado periodo: " + ("ABIERTO" if st.session_state["per_abierto"] else "CERRADO"))
+    st.sidebar.caption("Estado periodo: " + ("HABILITADO" if st.session_state["per_abierto"] else "INHABILITADO"))
 
 f_ini = st.sidebar.date_input("Desde:", value=date.today(), key="f_ini_in")
 f_fin = st.sidebar.date_input("Hasta:", value=date.today(), key="f_fin_in")
@@ -1204,13 +1462,13 @@ if not df_rep.empty:
     if f_bod != "TODAS":
         df_rep = df_rep[df_rep["Bodega"] == norm_bod(f_bod)]
     if f_ciu != "TODAS":
-        df_rep = df_rep[df_rep["Ciudad"] == str(f_ciu).strip().upper()]
+        df_rep = df_rep[df_rep["Ciudad"] == norm_mayus_limpio(f_ciu)]
     if f_cus != "TODOS":
         df_rep = df_rep[df_rep["Correo_Usuario"] == str(f_cus).strip().lower()]
     if f_sku != "TODOS":
-        df_rep = df_rep[df_rep["COD_SKU"] == str(f_sku).strip().upper()]
+        df_rep = df_rep[df_rep["COD_SKU"] == norm_mayus_limpio(f_sku)]
     if f_prv != "TODOS":
-        df_rep = df_rep[df_rep["PROVEEDOR"] == str(f_prv).strip().upper()]
+        df_rep = df_rep[df_rep["PROVEEDOR"] == norm_mayus_limpio(f_prv)]
 
 if es_admin:
     st.sidebar.markdown("---")
@@ -1242,8 +1500,8 @@ if es_admin:
     if st.sidebar.button("Sincronizar JSON a Google", use_container_width=True, key="btn_sync_gs"):
         pend = cargar_json()
         if pend:
-            con = {str(x.get("ID_Tx", "")).strip().upper() for x in leer_gs()} | ids_enviados()
-            dups = sum(1 for r in pend if str(r.get("ID_Tx", "")).strip().upper() in con)
+            con = {norm_mayus_limpio(x.get("ID_Tx", "")) for x in leer_gs()} | ids_enviados()
+            dups = sum(1 for r in pend if norm_mayus_limpio(r.get("ID_Tx", "")) in con)
             cnt_ok, cnt_om, cnt_dup, cnt_ov = 0, 0, 0, 0
             for r in pend:
                 ok_s, est_s, _ = enviar_gs(r, con, modo_dup=modo_dup_map[modo_dup_ui])
@@ -1274,6 +1532,7 @@ st.sidebar.markdown(
     f"**PIVOT:** {fecha_arch(pivot_path)}<br>"
     f"**NAC:** {fecha_arch(nac_path)}<br>"
     f"**JSON:** {fecha_arch(json_path)} ({len(regs_json)})<br>"
+    f"**Etiquetas Cola:** {len(st.session_state['cola_etiquetas'])}<br>"
     f"**{PESTANA_LOGS_GS}:** {len(logs_json)} ({pend_logs_cnt} sin enviar)",
     unsafe_allow_html=True,
 )
@@ -1282,7 +1541,10 @@ st.sidebar.markdown(
 # CABECERA + PESTAÑAS
 # ==============================================================================
 st.markdown('<div class="main-title">Toma Física & Muestreo V7 gPro</div>', unsafe_allow_html=True)
-st.caption(f"Script: `{RUTA_SCRIPT}` | Modificado: `{f_script}` | {PESTANA_LOGS_GS} locales: `{len(logs_json)}`")
+st.caption(
+    f"Script: `{RUTA_SCRIPT}` | Modificado: `{f_script}` | Periodo: `{'HABILITADO' if st.session_state['per_abierto'] else 'INHABILITADO'}` | "
+    f"COD_LABEL: `{st.session_state['cod_label_act']}` | Cola etiquetas: `{len(st.session_state['cola_etiquetas'])}`"
+)
 
 if st.session_state["errores_ui"]:
     st.warning("Incidencias registradas en esta sesión: " + " || ".join(st.session_state["errores_ui"][-2:]))
@@ -1297,28 +1559,30 @@ if es_admin and reversos_pend_all:
         "Revísalos en la pestaña *Dashboard Estadístico & Avance Visual* -> *Autorización de Reversos Pendientes*."
     )
 
-tab_op, tab_dash, tab_exp = st.tabs([
+tab_op, tab_dash, tab_etq, tab_exp = st.tabs([
     "Operación y Captura de Campo",
     "Dashboard Estadístico & Avance Visual",
+    f"Etiquetas A4 (~5,8×2,5 cm) [{len(st.session_state['cola_etiquetas'])}]",
     f"Exportación, Detalle & {PESTANA_LOGS_GS}",
 ])
 
 with tab_op:
     st.markdown('<div class="card-box">', unsafe_allow_html=True)
     if not st.session_state["per_abierto"]:
-        st.warning("Periodo CERRADO: el superusuario debe abrir el periodo para registrar.")
+        st.warning("Periodo INHABILITADO: habilítalo desde el panel izquierdo cuando corresponda.")
     if (not os.path.exists(nac_path)) and (not os.path.exists(pivot_path)):
         st.info("Sin `NAC.xlsx` ni `PIVOT` locales: puedes digitar o escanear `COD_SKU` y registrar directo.")
 
     c1, c2, c3 = st.columns(3)
     ciudad = c1.selectbox("Ciudad:", ciudades, key="ciu_in")
     c2.markdown(f"**Bodega:** `{bod_norm}`")
-    ubic = c3.text_input("Ubicación:", placeholder="EJ: N1311", key=f"ubic_in_{cap_v}").strip().upper()
+    ubic_raw = c3.text_input("Ubicación (MAYÚSCULAS):", placeholder="EJ: 5N2611", key=f"ubic_in_{cap_v}")
+    ubic = norm_mayus_limpio(ubic_raw)
 
     idx_b = resolver_col_bodega(nac_rows, bod_norm)
     muestreo = "Muestreo" in tipo_proc
     ya_aud = {
-        str(r.get("COD_SKU", "")).strip().upper()
+        norm_mayus_limpio(r.get("COD_SKU", ""))
         for r in regs_json
         if str(r.get("Periodo", "")).strip() == periodo_act and norm_bod(r.get("Bodega", "")) == bod_norm and es_computable_en_consolidado(r)
     }
@@ -1333,7 +1597,7 @@ with tab_op:
         f"{s} | {'[AUDITADO]' if s in ya_aud else '[PENDIENTE]'} {desc_map.get(s, '')}" for s in skus_unicos
     ]
     sel_combo = st.selectbox("Catálogo Teórico:", opts, key=f"cb_{bod_norm}_{cap_v}")
-    pre_sku = sel_combo.split(" | ")[0].strip().upper() if sel_combo != "-- SELECCIONE O ESCANEE SKU --" else ""
+    pre_sku = norm_mayus_limpio(sel_combo.split(" | ")[0]) if sel_combo != "-- SELECCIONE O ESCANEE SKU --" else ""
 
     with st.expander("Cámara: Lector de Código de Barras (Principal) & Foto Evidencia (Secundaria)"):
         t_scan, t_foto = st.tabs(["1. Lector Código de Barras", "2. Foto Evidencia"])
@@ -1345,7 +1609,9 @@ with tab_op:
                 st.caption("Foto de evidencia guardada en la sesión actual.")
 
     c4, c5, c6 = st.columns([2.5, 1.5, 1])
-    cod_sku = c4.text_input("COD_SKU:", value=pre_sku, key=f"sku_{bod_norm}_{cap_v}").strip().upper()
+    sku_raw = c4.text_input("COD_SKU (MAYÚSCULAS):", value=pre_sku, key=f"sku_{bod_norm}_{cap_v}")
+    cod_sku = norm_mayus_limpio(sku_raw)
+
     cant = c5.number_input("Cantidad (Q):", step=1, value=1, key=f"q_{bod_norm}_{cap_v}")
     motivo = ""
     pin_ingresado = ""
@@ -1353,13 +1619,13 @@ with tab_op:
 
     if cant < 0:
         r_m1, r_m2 = st.columns([2.2, 1.3])
-        motivo = r_m1.text_input("Motivo Reverso (Col K obligatorio si Q < 0):", key=f"mot_{bod_norm}_{cap_v}").strip().upper()
+        motivo = norm_mayus_limpio(r_m1.text_input("Motivo Reverso (Col K obligatorio si Q < 0):", key=f"mot_{bod_norm}_{cap_v}"))
         if not es_admin:
-            pin_ref_sku = generar_pin_tx(f"{periodo_act}|{bod_norm}|{cod_sku}", st.session_state["pin_reverso_act"])
-            pin_ingresado = r_m2.text_input("PIN Autorización (opcional):", max_chars=6, key=f"pin_{bod_norm}_{cap_v}").strip()
-            pin_valido_cust = bool(pin_ingresado) and (pin_ingresado == pin_ref_sku or pin_ingresado == str(st.session_state["pin_reverso_act"]).strip())
+            pin_dia = generar_pin_diario(st.session_state["pin_reverso_act"], date.today())
+            pin_ingresado = r_m2.text_input("PIN Día / Autorización (opcional):", max_chars=6, key=f"pin_{bod_norm}_{cap_v}").strip()
+            pin_valido_cust = bool(pin_ingresado) and (pin_ingresado == pin_dia or pin_ingresado == str(st.session_state["pin_reverso_act"]).strip())
             if pin_ingresado and not pin_valido_cust:
-                st.warning("PIN incorrecto: el reverso se registrará como **PENDIENTE_APROBACION** para revisión del admin.")
+                st.warning("PIN incorrecto: el reverso quedará **PENDIENTE_APROBACION** para revisión del admin.")
             elif pin_valido_cust:
                 st.success("PIN válido: reverso autorizado y aplicado al consolidado.")
             else:
@@ -1368,13 +1634,22 @@ with tab_op:
     c6.write("")
     c6.write("")
     ok_rev = (cant >= 0) or bool(motivo)
-    ubic_valida = bool(ubic) and ubic not in ["UBICACIÓN", "ESPECIFIQUE"]
+    ubic_valida = bool(ubic) and ubic not in ["UBICACIÓN", "UBICACION", "ESPECIFIQUE"]
     puede = st.session_state["per_abierto"] and ubic_valida and bool(cod_sku) and (cant != 0) and ok_rev
     btn_reg = c6.button("REGISTRAR", use_container_width=True, disabled=not puede, key="btn_reg_tx")
 
+    e_col1, e_col2, e_col3 = st.columns([2.2, 1.0, 1.8])
+    marcar_etq = e_col1.checkbox("Marcar este SKU para etiqueta (~5,8×2,5 cm)", value=False, key=f"chk_etq_{bod_norm}_{cap_v}")
+    copias_etq = e_col2.number_input("Copias:", min_value=1, max_value=30, value=1, step=1, key=f"cop_etq_{bod_norm}_{cap_v}")
+    if e_col3.button("Añadir SKU a cola etiqueta", use_container_width=True, disabled=not bool(cod_sku), key="btn_add_etq_rapido"):
+        d_etq = dict_maestro.get(cod_sku, {}).get("DESCRIPCIÓN") or dict_maestro.get(cod_sku, {}).get("DESCRIPCION") or desc_map.get(cod_sku, "")
+        agregar_etiqueta_cola(cod_sku, d_etq, bod_norm, ubic, usuario_lbl=usuario, copias=copias_etq)
+        st.success(f"Añadido {cod_sku} ({copias_etq} copia(s)) a la cola de etiquetas.")
+        st.rerun()
+
     faltan = []
     if not st.session_state["per_abierto"]:
-        faltan.append("Periodo abierto")
+        faltan.append("Periodo habilitado")
     if not ubic_valida:
         faltan.append("Ubicación")
     if not cod_sku:
@@ -1404,7 +1679,7 @@ with tab_op:
 
         if len(nac_rows) > 1:
             for row in nac_rows[1:]:
-                if row and row[0] and str(row[0]).strip().upper() == cod_sku:
+                if row and row[0] and norm_mayus_limpio(row[0]) == cod_sku:
                     st_nac = num_es(row[IDX_TOTAL_NAC], max_abs=1e12) if IDX_TOTAL_NAC < len(row) else 0.0
                     st_teo = num_es(row[idx_b], max_abs=1e12) if (idx_b < len(row) and sku_habilitado_col_v(row, muestreo=muestreo)) else 0.0
                     c_unit_vista = obtener_costo_nac_col_w(row)
@@ -1420,7 +1695,7 @@ with tab_op:
             for r in regs_json
             if str(r.get("Periodo", "")).strip() == periodo_act
             and norm_bod(r.get("Bodega", "")) == bod_norm
-            and str(r.get("COD_SKU", "")).strip().upper() == cod_sku
+            and norm_mayus_limpio(r.get("COD_SKU", "")) == cod_sku
             and es_computable_en_consolidado(r)
         )
         aplica_rev_ya = (cant >= 0) or es_admin or pin_valido_cust
@@ -1454,7 +1729,7 @@ with tab_op:
         st_teo_r, c_unit_r = 0.0, 0.0
         if len(nac_rows) > 1:
             for row in nac_rows[1:]:
-                if row and row[0] and str(row[0]).strip().upper() == cod_sku:
+                if row and row[0] and norm_mayus_limpio(row[0]) == cod_sku:
                     st_teo_r = num_es(row[idx_b], max_abs=1e12) if (idx_b < len(row) and sku_habilitado_col_v(row, muestreo=muestreo)) else 0.0
                     c_unit_r = obtener_costo_nac_col_w(row)
                     break
@@ -1469,7 +1744,7 @@ with tab_op:
             for r in regs_json
             if str(r.get("Periodo", "")).strip() == periodo_act
             and norm_bod(r.get("Bodega", "")) == bod_norm
-            and str(r.get("COD_SKU", "")).strip().upper() == cod_sku
+            and norm_mayus_limpio(r.get("COD_SKU", "")) == cod_sku
             and es_computable_en_consolidado(r)
         )
         motivo_final = motivo
@@ -1488,13 +1763,14 @@ with tab_op:
         dif_f, est_f, costo_total, costo_dif, c_unit_limpio = calcular_dif_estado_costo(
             q_acum_final, st_teo_r, cant, c_unit_r, est_rev=est_rev_ini
         )
+        desc_r = flex_r("DESCRIPCIÓN", "DESCRIPCION", "DESC")
         now = datetime.now()
         nuevo = {
             "Periodo": periodo_act,
             "ID_Tx": f"TX-{now.strftime('%Y%m%d%H%M%S')}",
             "Timestamp": now.strftime("%Y-%m-%d %H:%M:%S"),
             "Correo_Usuario": usuario,
-            "Ciudad": ciudad,
+            "Ciudad": norm_mayus_limpio(ciudad),
             "Bodega": bod_norm,
             "Ubicacion": ubic,
             "COD_SKU": cod_sku,
@@ -1502,11 +1778,11 @@ with tab_op:
             "BOD/SKU": f"{bod_norm}-{cod_sku}",
             "Motivo": motivo_final,
             "Estado_Reverso": est_rev_ini,
-            "LINEA DE INVENTARIO": flex_r("LÍNEA DE INVENTARIO", "LINEA", "INVENTARIO"),
-            "PROVEEDOR": flex_r("PROVEEDOR", "SUP", "FABRICANTE"),
-            "ALTERNO": flex_r("ALTERNO", "ALT"),
-            "DESCRIPCIÓN": flex_r("DESCRIPCIÓN", "DESCRIPCION", "DESC"),
-            "UNIDAD": flex_r("UNIDAD", "UND"),
+            "LINEA DE INVENTARIO": norm_mayus_limpio(flex_r("LÍNEA DE INVENTARIO", "LINEA", "INVENTARIO")),
+            "PROVEEDOR": norm_mayus_limpio(flex_r("PROVEEDOR", "SUP", "FABRICANTE")),
+            "ALTERNO": norm_mayus_limpio(flex_r("ALTERNO", "ALT")),
+            "DESCRIPCIÓN": desc_r,
+            "UNIDAD": norm_mayus_limpio(flex_r("UNIDAD", "UND")),
             "DIFERENCIA": float(dif_f),
             "ESTADO": est_f,
             "COSTO UNITARIO": float(c_unit_limpio),
@@ -1515,6 +1791,8 @@ with tab_op:
             "QSA_Teorico": float(st_teo_r),
         }
         if guardar_json(nuevo):
+            if marcar_etq:
+                agregar_etiqueta_cola(cod_sku, desc_r, bod_norm, ubic, usuario_lbl=usuario, copias=copias_etq)
             consolidar_estado_sku_en_json(periodo_act, bod_norm, cod_sku, st_teo_r)
             ok_g, est_g, tx_g = enviar_gs(nuevo)
             st.session_state["cap_v"] += 1
@@ -1550,10 +1828,10 @@ with tab_dash:
                 max_filas=20,
                 key_suf="rev_pend_tbl",
             )
-            lista_tx_pend = [str(x).strip().upper() for x in pend_rev_df["ID_Tx"].tolist() if str(x).strip()]
+            lista_tx_pend = [norm_mayus_limpio(x) for x in pend_rev_df["ID_Tx"].tolist() if norm_mayus_limpio(x)]
             sel_tx_rev = st.selectbox("Seleccionar reverso pendiente:", lista_tx_pend, key="sel_tx_rev_admin")
-            pin_sugerido = generar_pin_tx(sel_tx_rev, st.session_state["pin_reverso_act"])
-            st.caption(f"PIN sugerido para `{sel_tx_rev}`: **`{pin_sugerido}`** (o PIN base `{st.session_state['pin_reverso_act']}`)")
+            pin_dia_act = generar_pin_diario(st.session_state["pin_reverso_act"], date.today())
+            st.caption(f"PIN diario activo ({date.today().strftime('%Y-%m-%d')}): **`{pin_dia_act}`** (PIN base: `{st.session_state['pin_reverso_act']}`)")
             r_col1, r_col2 = st.columns(2)
             if r_col1.button("Aprobar Reverso", use_container_width=True, key="btn_aprobar_rev"):
                 ok_r, reg_mod = resolver_reverso_pendiente(sel_tx_rev, aprobar=True, admin_usr=usuario)
@@ -1623,6 +1901,37 @@ with tab_dash:
             max_filas=30,
             key_suf="dash_det_filt",
         )
+
+with tab_etq:
+    st.markdown("### Cola de Etiquetas (~5,8 × 2,5 cm) & Armado de Hoja A4")
+    st.caption(f"Campos impresos: `COD_SKU`, `DESCRIPCIÓN` y `FECHA | LOGIN` • `COD_LABEL` activo: `{st.session_state['cod_label_act']}`")
+    ec1, ec2, ec3, ec4 = st.columns([2.2, 1.0, 1.0, 1.4])
+    sku_etq_man = norm_mayus_limpio(ec1.text_input("Agregar COD_SKU a cola:", key="sku_etq_man_in"))
+    cop_etq_man = ec2.number_input("Copias:", min_value=1, max_value=33, value=1, step=1, key="cop_etq_man_in")
+    if ec3.button("Agregar", use_container_width=True, disabled=not bool(sku_etq_man), key="btn_add_etq_man"):
+        desc_m = dict_maestro.get(sku_etq_man, {}).get("DESCRIPCIÓN") or dict_maestro.get(sku_etq_man, {}).get("DESCRIPCION") or ""
+        agregar_etiqueta_cola(sku_etq_man, desc_m, bod_norm, "", usuario_lbl=usuario, copias=cop_etq_man)
+        st.rerun()
+    if ec4.button("Vaciar cola", use_container_width=True, disabled=len(st.session_state["cola_etiquetas"]) == 0, key="btn_vaciar_etq"):
+        st.session_state["cola_etiquetas"] = []
+        st.rerun()
+
+    if not df_rep.empty:
+        skus_filt = sorted([s for s in df_rep["COD_SKU"].unique() if s])
+        if skus_filt:
+            f_et1, f_et2 = st.columns([3, 1.5])
+            sel_skus_etq = f_et1.multiselect("Marcar SKUs del filtro actual para etiqueta:", skus_filt, key="ms_skus_etq")
+            if f_et2.button("Sumar seleccionados a cola", use_container_width=True, disabled=not bool(sel_skus_etq), key="btn_sum_ms_etq"):
+                for s_item in sel_skus_etq:
+                    d_s = dict_maestro.get(s_item, {}).get("DESCRIPCIÓN") or dict_maestro.get(s_item, {}).get("DESCRIPCION") or ""
+                    agregar_etiqueta_cola(s_item, d_s, bod_norm, "", usuario_lbl=usuario, copias=1)
+                st.rerun()
+
+    cola_act = st.session_state.get("cola_etiquetas", [])
+    st.caption(f"Etiquetas acumuladas en cola: **{len(cola_act)}** (hasta 33 etiquetas por hoja A4 en grilla 3×11 de ~5,8×2,5 cm).")
+    if cola_act:
+        render_tabla_segura(pd.DataFrame(cola_act), ["COD_SKU", "DESCRIPCION", "FECHA_LOGIN", "BODEGA"], max_filas=60, key_suf="tbl_cola_etq")
+    render_hoja_a4_etiquetas(cola_act, cod_label=st.session_state["cod_label_act"], ancho_mm=58, alto_mm=25)
 
 with tab_exp:
     st.markdown("### Detalle Filtrado & Exportación a Excel")
