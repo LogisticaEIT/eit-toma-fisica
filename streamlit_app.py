@@ -44,17 +44,29 @@ st.markdown(
     [data-testid="stHeader"] { background-color: #F8FAFC !important; }
     [data-testid="stSidebar"] { background-color: #0F172A !important; color: #F8FAFC !important; }
     [data-testid="stSidebar"] label, [data-testid="stSidebar"] p, [data-testid="stSidebar"] span,
-    [data-testid="stSidebar"] div, [data-testid="stSidebar"] h1, [data-testid="stSidebar"] h2, [data-testid="stSidebar"] h3 {
+    [data-testid="stSidebar"] div, [data-testid="stSidebar"] h1, [data-testid="stSidebar"] h2, [data-testid="stSidebar"] h3,
+    [data-testid="stSidebar"] summary {
         color: #F8FAFC !important;
     }
+    [data-testid="stSidebar"] details {
+        background-color: #1E293B !important;
+        border: 1px solid #334155 !important;
+        border-radius: 8px !important;
+        margin-bottom: 6px !important;
+        padding: 2px 4px !important;
+    }
     [data-testid="stSidebar"] input {
-        background-color: #1E293B !important; color: #FEF3C7 !important; border: 1px solid #F59E0B !important; font-weight: 700 !important;
+        background-color: #0F172A !important; color: #FEF3C7 !important; border: 1px solid #F59E0B !important; font-weight: 700 !important;
     }
     [data-testid="stSidebar"] [data-baseweb="select"] > div {
-        background-color: #1E293B !important; color: #FEF3C7 !important; border: 1px solid #F59E0B !important; font-weight: 700 !important;
+        background-color: #0F172A !important; color: #FEF3C7 !important; border: 1px solid #F59E0B !important; font-weight: 700 !important;
     }
     [data-baseweb="select"] * { color: #451A03 !important; }
     [data-testid="stSidebar"] [data-baseweb="select"] * { color: #FEF3C7 !important; }
+    [data-testid="stSidebar"] hr {
+        border-color: #475569 !important;
+        margin: 10px 0 !important;
+    }
     .main-title {
         background: #0F172A; color: #FFFFFF !important; padding: 14px 18px; border-radius: 10px;
         font-size: 20px !important; font-weight: 800; border-bottom: 4px solid #F59E0B; margin-bottom: 8px;
@@ -89,6 +101,21 @@ st.markdown(
 </style>
 """,
     unsafe_allow_html=True,
+)
+
+# Evita que Chrome/Edge traduzca siglas como "VP" -> "Vicepresidente" o "COD_SKU" -> "SKU del pago"
+components.html(
+    """
+    <script>
+    try {
+      window.parent.document.documentElement.setAttribute("translate", "no");
+      window.parent.document.documentElement.classList.add("notranslate");
+      window.parent.document.body.setAttribute("translate", "no");
+      window.parent.document.body.classList.add("notranslate");
+    } catch (e) {}
+    </script>
+    """,
+    height=0,
 )
 
 RUTA_SCRIPT = os.path.abspath(__file__)
@@ -277,7 +304,7 @@ def render_hoja_a4_etiquetas(cola, cod_label="LBL-EIT-A4", ancho_mm=58, alto_mm=
             s_desc = html.escape(norm_mayus_limpio(it.get("DESCRIPCION", ""))[:38])
             svg_bar = generar_svg_code128(s_sku, alto_px=36)
             celdas.append(
-                f'<div style="width:{ancho_mm}mm;height:{alto_mm}mm;border:1px dashed #64748B;box-sizing:border-box;'
+                f'<div class="notranslate" translate="no" style="width:{ancho_mm}mm;height:{alto_mm}mm;border:1px dashed #64748B;box-sizing:border-box;'
                 f'padding:1.2mm 2mm;display:flex;flex-direction:column;justify-content:center;align-items:center;'
                 f'text-align:center;background:#FFFFFF;overflow:hidden;gap:0.8mm;">'
                 f'<div style="width:100%;font-size:6.2pt;font-weight:700;color:#0F172A;line-height:1.05;'
@@ -288,7 +315,7 @@ def render_hoja_a4_etiquetas(cola, cod_label="LBL-EIT-A4", ancho_mm=58, alto_mm=
                 f'</div>'
             )
         bloques_html.append(
-            f'<div class="hoja-a4" style="width:210mm;min-height:297mm;padding:10mm 11mm;box-sizing:border-box;'
+            f'<div class="hoja-a4 notranslate" translate="no" style="width:210mm;min-height:297mm;padding:10mm 11mm;box-sizing:border-box;'
             f'background:#FFFFFF;border:1px solid #94A3B8;margin:0 auto 14px auto;display:grid;'
             f'grid-template-columns:repeat(3, {ancho_mm}mm);grid-auto-rows:{alto_mm}mm;gap:2mm 3mm;align-content:start;">'
             + "".join(celdas)
@@ -296,12 +323,12 @@ def render_hoja_a4_etiquetas(cola, cod_label="LBL-EIT-A4", ancho_mm=58, alto_mm=
         )
 
     html_doc = f"""
-    <div>
+    <div class="notranslate" translate="no">
       <div style="margin-bottom:10px;display:flex;gap:10px;align-items:center;flex-wrap:wrap;">
         <button onclick="window.print()" type="button" style="padding:8px 14px;background:#0F172A;color:#FFFFFF;border:none;border-radius:6px;font-weight:700;cursor:pointer;">
           Imprimir Hoja A4 ({len(cola)} etiquetas / {total_hojas} hoja(s))
         </button>
-        <span style="font-size:12px;color:#334155;font-weight:700;">Lote: {html.escape(cod_label)} • A4 • {ancho_mm}×{alto_mm} mm • DESCRIPCIÓN / CODE128 / COD_SKU centrado</span>
+        <span style="font-size:12px;color:#334155;font-weight:700;">A4 • {ancho_mm}×{alto_mm} mm • DESCRIPCIÓN / CODE128 / COD_SKU centrado</span>
       </div>
       <style>
         @media print {{
@@ -771,7 +798,7 @@ def armar_payload_gs(reg, tx_id):
         reg.get("Periodo", ""), tx_id, reg.get("Timestamp", ""), reg.get("Correo_Usuario", ""),
         reg.get("Ciudad", ""), fmt_txt(bod_n), ubic_n,
         fmt_txt(sku_n), q_v, f"{bod_n}-{sku_n}", mot_txt,
-        reg.get("LINEA DE INVENTARIO", ""), reg.get("PROVEEDOR", ""), fmt_txt(reg.get("ALTERNO", "")),
+        reg.get("LINEA DE INVENTARIO", ""), norm_mayus_limpio(reg.get("PROVEEDOR", "")), fmt_txt(reg.get("ALTERNO", "")),
         reg.get("DESCRIPCIÓN", ""), reg.get("UNIDAD", ""), dif_v, est_v,
         cu, ct_v, cd_v, num_es(reg.get("QSA_Teorico", 0)),
     ]
@@ -890,7 +917,7 @@ def consolidar_df_por_sku(df_in):
             "Bodega": bod_k,
             "COD_SKU": sku_k,
             "DESCRIPCIÓN": str(grp["DESCRIPCIÓN"].iloc[-1] or ""),
-            "PROVEEDOR": str(grp["PROVEEDOR"].iloc[-1] or ""),
+            "PROVEEDOR": norm_mayus_limpio(grp["PROVEEDOR"].iloc[-1] or ""),
             "Tx_Count": int(len(grp)),
             "Q_Neta": q_neta,
             "QSA_Teorico": q_teo,
@@ -1030,6 +1057,8 @@ def construir_resumen_bodega(df, nac_rows, muestreo=True, bodega_filtro="TODAS")
                 "Avance_Pct": pct_avance,
                 "Tx": int(len(grp)),
                 "Cantidad_Q": round(float(df_sku_u["Q_Neta"].sum()), 2) if not df_sku_u.empty else 0.0,
+                "QSA_Teorico_Tot": round(float(df_sku_u["QSA_Teorico"].sum()), 2) if not df_sku_u.empty else 0.0,
+                "Diferencia_Q_Tot": round(float(df_sku_u["Diferencia_Neta"].sum()), 2) if not df_sku_u.empty else 0.0,
                 "Sobrantes": int((df_sku_u["Estado_Neto"] == "SOBRANTE").sum()) if not df_sku_u.empty else 0,
                 "Faltantes": int((df_sku_u["Estado_Neto"] == "FALTANTE").sum()) if not df_sku_u.empty else 0,
                 "Cuadrados": int((df_sku_u["Estado_Neto"] == "CUADRADO (OK)").sum()) if not df_sku_u.empty else 0,
@@ -1042,7 +1071,7 @@ def construir_resumen_bodega(df, nac_rows, muestreo=True, bodega_filtro="TODAS")
 def render_svg_barras_comparativas(df_plot, label_col, serie_a, serie_b, titulo, leyenda_a, leyenda_b, color_a="#2563EB", color_b="#94A3B8", es_moneda=False):
     if df_plot is None or df_plot.empty:
         return
-    filas = df_plot.head(14).to_dict(orient="records")
+    filas = df_plot.head(10).to_dict(orient="records")
     max_v = max(
         [abs(float(r.get(serie_a, 0) or 0)) for r in filas]
         + [abs(float(r.get(serie_b, 0) or 0)) for r in filas]
@@ -1051,15 +1080,15 @@ def render_svg_barras_comparativas(df_plot, label_col, serie_a, serie_b, titulo,
     row_h = 42
     top_pad = 28
     left_w = 135
-    bar_max_w = 400
-    svg_w = left_w + bar_max_w + 145
+    bar_max_w = 390
+    svg_w = left_w + bar_max_w + 150
     svg_h = top_pad + len(filas) * row_h + 10
 
     elems = [
         f'<rect x="10" y="6" width="12" height="12" rx="2" fill="{color_a}"/>',
         f'<text x="27" y="16" font-size="11" font-weight="700" fill="#0F172A">{html.escape(leyenda_a)}</text>',
-        f'<rect x="195" y="6" width="12" height="12" rx="2" fill="{color_b}"/>',
-        f'<text x="212" y="16" font-size="11" font-weight="700" fill="#0F172A">{html.escape(leyenda_b)}</text>',
+        f'<rect x="200" y="6" width="12" height="12" rx="2" fill="{color_b}"/>',
+        f'<text x="217" y="16" font-size="11" font-weight="700" fill="#0F172A">{html.escape(leyenda_b)}</text>',
     ]
     for i, r in enumerate(filas):
         y = top_pad + i * row_h
@@ -1078,7 +1107,7 @@ def render_svg_barras_comparativas(df_plot, label_col, serie_a, serie_b, titulo,
         elems.append(f'<line x1="8" y1="{y + 37}" x2="{svg_w - 8}" y2="{y + 37}" stroke="#E2E8F0" stroke-width="1"/>')
 
     svg_html = (
-        f'<div class="chart-card"><div class="chart-title">{html.escape(titulo)}</div>'
+        f'<div class="chart-card notranslate" translate="no"><div class="chart-title">{html.escape(titulo)}</div>'
         f'<svg width="100%" viewBox="0 0 {svg_w} {svg_h}" style="max-width:100%;height:auto;display:block;">'
         + "".join(elems)
         + "</svg></div>"
@@ -1089,12 +1118,12 @@ def render_svg_barras_comparativas(df_plot, label_col, serie_a, serie_b, titulo,
 def render_svg_barras_simples(df_plot, label_col, val_col, titulo, color_pos="#16A34A", color_neg="#DC2626", es_moneda=False):
     if df_plot is None or df_plot.empty:
         return
-    filas = df_plot.head(14).to_dict(orient="records")
+    filas = df_plot.head(10).to_dict(orient="records")
     max_v = max([abs(float(r.get(val_col, 0) or 0)) for r in filas] + [1.0])
     row_h = 30
     left_w = 145
-    bar_max_w = 390
-    svg_w = left_w + bar_max_w + 145
+    bar_max_w = 385
+    svg_w = left_w + bar_max_w + 150
     svg_h = len(filas) * row_h + 12
     elems = []
     for i, r in enumerate(filas):
@@ -1108,7 +1137,7 @@ def render_svg_barras_simples(df_plot, label_col, val_col, titulo, color_pos="#1
         elems.append(f'<rect x="{left_w}" y="{y + 4}" width="{w}" height="16" rx="3" fill="{col_b}"/>')
         elems.append(f'<text x="{left_w + w + 6}" y="{y + 16}" font-size="11" font-weight="700" fill="#0F172A">{html.escape(fv)}</text>')
     st.markdown(
-        f'<div class="chart-card"><div class="chart-title">{html.escape(titulo)}</div>'
+        f'<div class="chart-card notranslate" translate="no"><div class="chart-title">{html.escape(titulo)}</div>'
         f'<svg width="100%" viewBox="0 0 {svg_w} {svg_h}" style="max-width:100%;height:auto;display:block;">'
         + "".join(elems)
         + "</svg></div>",
@@ -1117,40 +1146,45 @@ def render_svg_barras_simples(df_plot, label_col, val_col, titulo, color_pos="#1
 
 
 def render_graficos_avance_operativo(df_sku_consol, df_bod_av):
-    st.markdown("#### Gráficos Comparativos: Avance de Auditoría, Cantidades y Valoración Neta")
+    st.markdown("#### Gráficos Ejecutivos Totales (Escalables para 5.000+ SKUs)")
+    if df_bod_av is None or df_bod_av.empty:
+        return
+
     c_g1, c_g2 = st.columns(2)
     with c_g1:
-        if df_bod_av is not None and not df_bod_av.empty:
-            render_svg_barras_comparativas(
-                df_bod_av, "Bodega", "SKU_Contados", "SKU_Teoricos",
-                "SKUs Auditados vs. SKUs Teóricos por Bodega",
-                "SKUs Auditados", "SKUs Teóricos",
-                color_a="#16A34A", color_b="#1E3A8A", es_moneda=False,
-            )
+        render_svg_barras_comparativas(
+            df_bod_av, "Bodega", "SKU_Contados", "SKU_Teoricos",
+            "Totales de SKUs: Auditados vs. Teóricos por Bodega",
+            "SKUs Contados", "SKUs Teóricos",
+            color_a="#16A34A", color_b="#1E3A8A", es_moneda=False,
+        )
     with c_g2:
-        if df_bod_av is not None and not df_bod_av.empty:
-            render_svg_barras_comparativas(
-                df_bod_av, "Bodega", "Costo_Total_USD", "Costo_Dif_USD",
-                "Valor Auditado vs. Impacto Diferencia Neta por Bodega",
-                "Valor Auditado", "Impacto Dif. Neto",
-                color_a="#0284C7", color_b="#F59E0B", es_moneda=True,
-            )
+        render_svg_barras_comparativas(
+            df_bod_av, "Bodega", "Cantidad_Q", "QSA_Teorico_Tot",
+            "Totales en Cantidades (Unidades): Q Contada vs. QSA Teórico",
+            "Q Física Contada", "QSA Teórico Total",
+            color_a="#2563EB", color_b="#64748B", es_moneda=False,
+        )
 
-    if df_sku_consol is not None and not df_sku_consol.empty:
-        c_g3, c_g4 = st.columns(2)
-        with c_g3:
-            render_svg_barras_comparativas(
-                df_sku_consol, "COD_SKU", "Q_Neta", "QSA_Teorico",
-                "Cantidad Física Neta vs. QSA Teórico por SKU",
-                "Q Física Neta", "QSA Teórico",
-                color_a="#2563EB", color_b="#64748B", es_moneda=False,
-            )
-        with c_g4:
-            render_svg_barras_simples(
-                df_sku_consol, "COD_SKU", "Costo_Dif_Neto",
-                "Impacto Económico Neto de Diferencia por SKU",
-                color_pos="#16A34A", color_neg="#DC2626", es_moneda=True,
-            )
+    c_g3, c_g4 = st.columns(2)
+    with c_g3:
+        render_svg_barras_comparativas(
+            df_bod_av, "Bodega", "Costo_Total_USD", "Costo_Dif_USD",
+            "Totales en Valores (USD): Valor Contado vs. Impacto Diferencia",
+            "Valor Total Contado", "Impacto Dif. Neto",
+            color_a="#0284C7", color_b="#F59E0B", es_moneda=True,
+        )
+    with c_g4:
+        df_tot_nac = pd.DataFrame([
+            {"Concepto": "SKUs Teóricos", "Total": float(df_bod_av["SKU_Teoricos"].sum())},
+            {"Concepto": "SKUs Contados", "Total": float(df_bod_av["SKU_Contados"].sum())},
+            {"Concepto": "SKUs Pendientes", "Total": float(df_bod_av["SKU_Pendientes"].sum())},
+        ])
+        render_svg_barras_simples(
+            df_tot_nac, "Concepto", "Total",
+            "Consolidado Global de Cobertura de SKUs (Filtro Activo)",
+            color_pos="#0F172A", es_moneda=False,
+        )
 
 
 def render_tabla_segura(df_in, cols, max_filas=50):
@@ -1164,7 +1198,7 @@ def render_tabla_segura(df_in, cols, max_filas=50):
         tds = [f"<td>{html.escape(_formatear_celda_texto(row.get(c, ''), c))}</td>" for c in cols]
         trs.append(f"<tr>{''.join(tds)}</tr>")
     st.markdown(
-        f'<div style="overflow-x:auto;border-radius:8px;border:1px solid #CBD5E1;margin-top:6px;margin-bottom:10px;"><table class="tf-table"><thead><tr>{ths}</tr></thead><tbody>{"".join(trs)}</tbody></table></div>',
+        f'<div class="notranslate" translate="no" style="overflow-x:auto;border-radius:8px;border:1px solid #CBD5E1;margin-top:6px;margin-bottom:10px;"><table class="tf-table"><thead><tr>{ths}</tr></thead><tbody>{"".join(trs)}</tbody></table></div>',
         unsafe_allow_html=True,
     )
     if len(df_in) > max_filas:
@@ -1223,7 +1257,7 @@ def decodificar_sku_desde_imagen_bytes(img_bytes):
 
 def render_lector_codigos_barras(comp_key):
     html_code = f"""
-    <div style="font-family:sans-serif;padding:8px;background:#F8FAFC;border:1px solid #CBD5E1;border-radius:8px;">
+    <div class="notranslate" translate="no" style="font-family:sans-serif;padding:8px;background:#F8FAFC;border:1px solid #CBD5E1;border-radius:8px;">
       <div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:8px;">
         <button id="btnStartScan_{comp_key}" type="button" style="padding:8px 12px;background:#0F172A;color:#FFF;border:none;border-radius:6px;font-weight:700;cursor:pointer;">Activar cámara ZXing</button>
         <button id="btnStopScan_{comp_key}" type="button" style="padding:8px 12px;background:#475569;color:#FFF;border:none;border-radius:6px;font-weight:700;cursor:pointer;">Detener cámara</button>
@@ -1343,7 +1377,7 @@ def excel_bytes(df, nac_rows=None, muestreo=True):
         ws.append(list(r_vals))
         for c_idx, cname in enumerate(df.columns, start=1):
             c = ws.cell(row=ws.max_row, column=c_idx)
-            if cname in {"Bodega", "COD_SKU", "ALTERNO", "ID_Tx", "Ubicacion"}:
+            if cname in {"Bodega", "COD_SKU", "ALTERNO", "ID_Tx", "Ubicacion", "PROVEEDOR"}:
                 c.number_format = "@"
                 if c.value is not None:
                     c.value = norm_mayus_limpio(c.value)
@@ -1519,153 +1553,119 @@ def cargar_nac(p, bytes_subidos=None):
 
 
 # ==============================================================================
-# PANEL IZQUIERDO
+# PANEL IZQUIERDO AGRUPADO EN CARPETAS (TIPO EXPLORADOR) + LÍNEAS DIVISORIAS
 # ==============================================================================
-usuario = st.sidebar.text_input("Correo Usuario / Custodio:", value="alexpajaritoruiz@icloud.com", key="usr_in").strip().lower()
-st.session_state["usr_act"] = usuario
-es_admin = usuario in {"alexpajaritoruiz@icloud.com", "jlogistica.eit@gmail.com"} or "ALEX" in usuario.upper() or "PAJARI" in usuario.upper()
-bods_perm = BODEGAS_OFICIALES if es_admin else CUSTODIO_BOD.get(usuario, ["01"])
-
-tipo_proc = st.sidebar.radio("Modo:", ["Control Mensual de Inventario (Muestreo)", "Toma Física Completa"], key="modo_proc_in")
-if "bod_act" not in st.session_state or st.session_state["bod_act"] not in bods_perm:
-    st.session_state["bod_act"] = bods_perm[0]
-
-
 def limpiar_controles_bodega():
     st.session_state["cap_v"] = st.session_state.get("cap_v", 0) + 1
     st.session_state.pop("flt_bod", None)
     st.session_state.pop("flt_ciu", None)
 
 
-bod_norm = norm_bod(st.sidebar.radio("Bodega:", bods_perm, key="bod_act", on_change=limpiar_controles_bodega))
-ciudades = ["Quito"] if bod_norm in ["01", "05", "5V"] else (["Guayaquil"] if bod_norm in ["03", "3V"] else (["Cuenca"] if bod_norm == "04" else ["Quito", "Guayaquil", "Cuenca", "Otras"]))
-ciudad_def = ciudades[0].upper()
+with st.sidebar.expander("1. Operación, Usuario & Bodega", expanded=True):
+    usuario = st.text_input("Correo Usuario / Custodio:", value="alexpajaritoruiz@icloud.com", key="usr_in").strip().lower()
+    st.session_state["usr_act"] = usuario
+    es_admin = usuario in {"alexpajaritoruiz@icloud.com", "jlogistica.eit@gmail.com"} or "ALEX" in usuario.upper() or "PAJARI" in usuario.upper()
+    bods_perm = BODEGAS_OFICIALES if es_admin else CUSTODIO_BOD.get(usuario, ["01"])
+
+    tipo_proc = st.radio("Modo:", ["Control Mensual de Inventario (Muestreo)", "Toma Física Completa"], key="modo_proc_in")
+    if "bod_act" not in st.session_state or st.session_state["bod_act"] not in bods_perm:
+        st.session_state["bod_act"] = bods_perm[0]
+
+    bod_norm = norm_bod(st.radio("Bodega:", bods_perm, key="bod_act", on_change=limpiar_controles_bodega))
+    ciudades = ["Quito"] if bod_norm in ["01", "05", "5V"] else (["Guayaquil"] if bod_norm in ["03", "3V"] else (["Cuenca"] if bod_norm == "04" else ["Quito", "Guayaquil", "Cuenca", "Otras"]))
+    ciudad_def = ciudades[0].upper()
+
+    f_ini = st.date_input("Desde:", value=date.today(), key="f_ini_in")
+    f_fin = st.date_input("Hasta:", value=date.today(), key="f_fin_in")
+    periodo_act = f"{f_ini.strftime('%Y-%m-%d')} al {f_fin.strftime('%Y-%m-%d')}"
+
+st.sidebar.markdown("---")
 
 if "per_abierto" not in st.session_state:
     st.session_state["per_abierto"] = False
-if es_admin:
-    st.session_state["per_abierto"] = st.sidebar.toggle("Habilitar periodo de auditoría (Admin)", value=st.session_state["per_abierto"], key="per_abierto_tgl")
-    st.session_state["pin_reverso_act"] = st.sidebar.text_input("PIN Base Reversos (Admin):", value=st.session_state["pin_reverso_act"], key="pin_rev_admin_in").strip()
-else:
-    st.sidebar.caption("Estado periodo: " + ("HABILITADO" if st.session_state["per_abierto"] else "INHABILITADO"))
 
-f_ini = st.sidebar.date_input("Desde:", value=date.today(), key="f_ini_in")
-f_fin = st.sidebar.date_input("Hasta:", value=date.today(), key="f_fin_in")
-periodo_act = f"{f_ini.strftime('%Y-%m-%d')} al {f_fin.strftime('%Y-%m-%d')}"
+with st.sidebar.expander("2. Control de Periodo, PIN & Enlace Custodios", expanded=es_admin):
+    if es_admin:
+        st.session_state["per_abierto"] = st.toggle("Habilitar periodo de auditoría (Admin)", value=st.session_state["per_abierto"], key="per_abierto_tgl")
+        st.session_state["pin_reverso_act"] = st.text_input("PIN Base Reversos (Admin):", value=st.session_state["pin_reverso_act"], key="pin_rev_admin_in").strip()
+    else:
+        st.caption("Estado periodo: " + ("HABILITADO" if st.session_state["per_abierto"] else "INHABILITADO"))
 
-url_wa_raw = st.sidebar.text_input("URL Custodios:", value="https://eit-toma-fisica-4wrzxgv3pgzfdr8agv9mtm.streamlit.app/", key="url_wa_in")
-url_wa_limpia = "".join(str(url_wa_raw or "").split()).strip()
-if url_wa_limpia:
-    msg_wa = f"CONTROL DE INVENTARIO EIT\n\nEnlace para registro de tomas físicas:\n{url_wa_limpia}"
-    st.sidebar.markdown(
-        f'<a href="https://api.whatsapp.com/send?text={urllib.parse.quote(msg_wa)}" target="_blank" style="display:block;text-align:center;padding:8px;background:#16A34A;color:#FFF!important;font-weight:700;border-radius:6px;text-decoration:none;">Enviar por WhatsApp</a>',
-        unsafe_allow_html=True,
-    )
-
-with st.sidebar.expander("Fuente Catálogo / Saldos (GS / Excel)"):
-    secret_url = ""
-    try:
-        secret_url = str(st.secrets.get("CATALOGO_GS_URL", "") or "")
-    except Exception:
-        secret_url = ""
-    st.session_state["fuente_gs_url"] = st.text_input(
-        "URL CSV/JSON Catálogo o Saldos (GS):",
-        value=st.session_state.get("fuente_gs_url") or secret_url,
-        placeholder="https://docs.google.com/spreadsheets/d/.../export?format=csv",
-        key="fuente_gs_url_in",
-    ).strip()
-    up_pivot = st.file_uploader("Subir PIVOT (.xlsm/.xlsx):", type=["xlsm", "xlsx"], key="up_pivot_in")
-    up_nac = st.file_uploader("Subir NAC / Saldos (.xlsx):", type=["xlsx"], key="up_nac_in")
-
-if st.sidebar.button("Refrescar datos", use_container_width=True, key="btn_ref_top"):
-    leer_gs.clear()
-    cargar_pivot.clear()
-    cargar_nac.clear()
-    cargar_fuente_gs_externa.clear()
-    st.rerun()
-
-dm_gs, nac_gs = cargar_fuente_gs_externa(st.session_state["fuente_gs_url"])
-dm_loc = cargar_pivot(pivot_path, up_pivot.getvalue() if up_pivot else None)
-nac_loc = cargar_nac(nac_path, up_nac.getvalue() if up_nac else None)
-
-dict_maestro = dict(dm_gs)
-for k_s, v_d in dm_loc.items():
-    dict_maestro.setdefault(k_s, {}).update(v_d)
-
-nac_rows = nac_gs if nac_gs else nac_loc
-regs_json = cargar_json()
-logs_json = cargar_logs()
-f_script = fecha_arch(RUTA_SCRIPT)
-cap_v = st.session_state["cap_v"]
+    url_wa_raw = st.text_input("URL Custodios:", value="https://eit-toma-fisica-4wrzxgv3pgzfdr8agv9mtm.streamlit.app/", key="url_wa_in")
+    url_wa_limpia = "".join(str(url_wa_raw or "").split()).strip()
+    if url_wa_limpia:
+        msg_wa = f"CONTROL DE INVENTARIO EIT\n\nEnlace para registro de tomas físicas:\n{url_wa_limpia}"
+        st.markdown(
+            f'<a href="https://api.whatsapp.com/send?text={urllib.parse.quote(msg_wa)}" target="_blank" style="display:block;text-align:center;padding:8px;background:#16A34A;color:#FFF!important;font-weight:700;border-radius:6px;text-decoration:none;">Enviar por WhatsApp</a>',
+            unsafe_allow_html=True,
+        )
 
 st.sidebar.markdown("---")
-st.sidebar.markdown("### Filtros de Análisis & Reportes")
-incluir_gs_rep = st.sidebar.checkbox("Anexar solo ID_Tx nuevos desde Google Sheets", value=False, key="chk_inc_gs")
-origen_label = "JSON local + ID_Tx nuevos en GS" if incluir_gs_rep else "JSON local (toma_fisica_registros.json)"
-st.sidebar.caption(f"Origen activo: {origen_label}")
 
+with st.sidebar.expander("3. Filtros de Estadística & Reportes", expanded=False):
+    incluir_gs_rep = st.checkbox("Anexar solo ID_Tx nuevos desde Google Sheets", value=False, key="chk_inc_gs")
+    origen_label = "JSON local + ID_Tx nuevos en GS" if incluir_gs_rep else "JSON local (toma_fisica_registros.json)"
+    st.caption(f"Origen activo: {origen_label}")
 
-def resetear_filtros_estadistica():
-    st.session_state["flt_per"] = "TODOS"
-    st.session_state["flt_bod"] = "TODAS"
-    st.session_state["flt_ciu"] = "TODAS"
-    st.session_state["flt_cus"] = "TODOS"
-    st.session_state["flt_sku"] = "TODOS"
-    st.session_state["flt_prv"] = "TODOS"
+    def resetear_filtros_estadistica():
+        st.session_state["flt_per"] = "TODOS"
+        st.session_state["flt_bod"] = "TODAS"
+        st.session_state["flt_ciu"] = "TODAS"
+        st.session_state["flt_cus"] = "TODOS"
+        st.session_state["flt_sku"] = "TODOS"
+        st.session_state["flt_prv"] = "TODOS"
 
+    def sincronizar_filtros_operacion():
+        st.session_state["flt_per"] = periodo_act
+        st.session_state["flt_bod"] = bod_norm
+        st.session_state["flt_ciu"] = ciudad_def
+        st.session_state["flt_cus"] = "TODOS"
+        st.session_state["flt_sku"] = "TODOS"
+        st.session_state["flt_prv"] = "TODOS"
 
-def sincronizar_filtros_operacion():
-    st.session_state["flt_per"] = periodo_act
-    st.session_state["flt_bod"] = bod_norm
-    st.session_state["flt_ciu"] = ciudad_def
-    st.session_state["flt_cus"] = "TODOS"
-    st.session_state["flt_sku"] = "TODOS"
-    st.session_state["flt_prv"] = "TODOS"
+    f_col1, f_col2 = st.columns(2)
+    f_col1.button("Periodo/Bod act.", on_click=sincronizar_filtros_operacion, use_container_width=True, key="btn_flt_act")
+    f_col2.button("Ver todo", on_click=resetear_filtros_estadistica, use_container_width=True, key="btn_flt_all")
 
+    df_base_rep = prep_df(datos_combinados(incluir_gs=incluir_gs_rep))
+    muestreo_rep = "Muestreo" in tipo_proc
 
-f_col1, f_col2 = st.sidebar.columns(2)
-f_col1.button("Periodo/Bod act.", on_click=sincronizar_filtros_operacion, use_container_width=True, key="btn_flt_act")
-f_col2.button("Ver todo", on_click=resetear_filtros_estadistica, use_container_width=True, key="btn_flt_all")
+    periodos_disp = ["TODOS"] + sorted(set([periodo_act] + [p for p in df_base_rep["Periodo"].unique() if p]), reverse=True)
+    if "flt_per" not in st.session_state or st.session_state["flt_per"] not in periodos_disp:
+        st.session_state["flt_per"] = periodo_act if periodo_act in periodos_disp else "TODOS"
+    f_per = st.selectbox("Periodo:", periodos_disp, key="flt_per")
 
-df_base_rep = prep_df(datos_combinados(incluir_gs=incluir_gs_rep))
-muestreo_rep = "Muestreo" in tipo_proc
+    bodegas_disp = ["TODAS"] + sorted(set(BODEGAS_OFICIALES + [b for b in df_base_rep["Bodega"].unique() if b]))
+    if "flt_bod" not in st.session_state or st.session_state["flt_bod"] not in bodegas_disp:
+        st.session_state["flt_bod"] = bod_norm if bod_norm in bodegas_disp else "TODAS"
+    f_bod = st.selectbox("Bodega:", bodegas_disp, key="flt_bod")
 
-periodos_disp = ["TODOS"] + sorted(set([periodo_act] + [p for p in df_base_rep["Periodo"].unique() if p]), reverse=True)
-if "flt_per" not in st.session_state or st.session_state["flt_per"] not in periodos_disp:
-    st.session_state["flt_per"] = periodo_act if periodo_act in periodos_disp else "TODOS"
-f_per = st.sidebar.selectbox("Periodo:", periodos_disp, key="flt_per")
+    ciudades_disp = ["TODAS"] + sorted(set(["QUITO", "GUAYAQUIL", "CUENCA", ciudad_def] + [c for c in df_base_rep["Ciudad"].unique() if c]))
+    if "flt_ciu" not in st.session_state or st.session_state["flt_ciu"] not in ciudades_disp:
+        st.session_state["flt_ciu"] = ciudad_def if ciudad_def in ciudades_disp else "TODAS"
+    f_ciu = st.selectbox("Ciudad:", ciudades_disp, key="flt_ciu")
 
-bodegas_disp = ["TODAS"] + sorted(set(BODEGAS_OFICIALES + [b for b in df_base_rep["Bodega"].unique() if b]))
-if "flt_bod" not in st.session_state or st.session_state["flt_bod"] not in bodegas_disp:
-    st.session_state["flt_bod"] = bod_norm if bod_norm in bodegas_disp else "TODAS"
-f_bod = st.sidebar.selectbox("Bodega:", bodegas_disp, key="flt_bod")
+    custodios_disp = ["TODOS"] + sorted([c for c in df_base_rep["Correo_Usuario"].unique() if c]) if not df_base_rep.empty else ["TODOS"]
+    if "flt_cus" not in st.session_state or st.session_state["flt_cus"] not in custodios_disp:
+        st.session_state["flt_cus"] = "TODOS"
+    f_cus = st.selectbox("Custodio:", custodios_disp, key="flt_cus")
 
-ciudades_disp = ["TODAS"] + sorted(set(["QUITO", "GUAYAQUIL", "CUENCA", ciudad_def] + [c for c in df_base_rep["Ciudad"].unique() if c]))
-if "flt_ciu" not in st.session_state or st.session_state["flt_ciu"] not in ciudades_disp:
-    st.session_state["flt_ciu"] = ciudad_def if ciudad_def in ciudades_disp else "TODAS"
-f_ciu = st.sidebar.selectbox("Ciudad:", ciudades_disp, key="flt_ciu")
+    skus_disp = ["TODOS"] + sorted([s for s in df_base_rep["COD_SKU"].unique() if s]) if not df_base_rep.empty else ["TODOS"]
+    if "flt_sku" not in st.session_state or st.session_state["flt_sku"] not in skus_disp:
+        st.session_state["flt_sku"] = "TODOS"
+    f_sku = st.selectbox("COD_SKU:", skus_disp, key="flt_sku")
 
-custodios_disp = ["TODOS"] + sorted([c for c in df_base_rep["Correo_Usuario"].unique() if c]) if not df_base_rep.empty else ["TODOS"]
-if "flt_cus" not in st.session_state or st.session_state["flt_cus"] not in custodios_disp:
-    st.session_state["flt_cus"] = "TODOS"
-f_cus = st.sidebar.selectbox("Custodio:", custodios_disp, key="flt_cus")
+    provs_disp = ["TODOS"] + sorted([p for p in df_base_rep["PROVEEDOR"].unique() if p]) if not df_base_rep.empty else ["TODOS"]
+    if "flt_prv" not in st.session_state or st.session_state["flt_prv"] not in provs_disp:
+        st.session_state["flt_prv"] = "TODOS"
+    f_prv = st.selectbox("Proveedor:", provs_disp, key="flt_prv")
 
-skus_disp = ["TODOS"] + sorted([s for s in df_base_rep["COD_SKU"].unique() if s]) if not df_base_rep.empty else ["TODOS"]
-if "flt_sku" not in st.session_state or st.session_state["flt_sku"] not in skus_disp:
-    st.session_state["flt_sku"] = "TODOS"
-f_sku = st.sidebar.selectbox("COD_SKU:", skus_disp, key="flt_sku")
-
-provs_disp = ["TODOS"] + sorted([p for p in df_base_rep["PROVEEDOR"].unique() if p]) if not df_base_rep.empty else ["TODOS"]
-if "flt_prv" not in st.session_state or st.session_state["flt_prv"] not in provs_disp:
-    st.session_state["flt_prv"] = "TODOS"
-f_prv = st.sidebar.selectbox("Proveedor:", provs_disp, key="flt_prv")
-
-if st.sidebar.button("Refrescar estadísticas", use_container_width=True, key="btn_ref_stats_bottom"):
-    leer_gs.clear()
-    cargar_pivot.clear()
-    cargar_nac.clear()
-    cargar_fuente_gs_externa.clear()
-    st.rerun()
+    if st.button("Refrescar estadísticas", use_container_width=True, key="btn_ref_stats_bottom"):
+        leer_gs.clear()
+        cargar_pivot.clear()
+        cargar_nac.clear()
+        cargar_fuente_gs_externa.clear()
+        st.rerun()
 
 df_rep = df_base_rep.copy()
 if not df_rep.empty:
@@ -1688,79 +1688,96 @@ if not df_rep.empty:
 
 df_sku_rep = consolidar_df_por_sku(df_rep)
 
-if es_admin:
-    st.sidebar.markdown("---")
-    st.sidebar.markdown("### Métricas & Sync (Superusuario)")
-    if not df_rep.empty:
-        bod_m = bod_norm if f_bod == "TODAS" else norm_bod(f_bod)
-        df_sku_bod = df_sku_rep[df_sku_rep["Bodega"] == bod_m] if not df_sku_rep.empty else pd.DataFrame()
-        teo_b = contar_teoricos_bodega(nac_rows, bod_m, muestreo=muestreo_rep)
-        cont_b = int(df_sku_bod["COD_SKU"].nunique()) if not df_sku_bod.empty else 0
-        pend_b = max(teo_b - cont_b, 0) if teo_b > 0 else 0
-        q_tot = float(df_sku_rep["Q_Neta"].sum()) if not df_sku_rep.empty else 0.0
-        val_tot = float(df_sku_rep["Costo_Total_Neto"].sum()) if not df_sku_rep.empty else 0.0
-        dif_tot = float(df_sku_rep["Costo_Dif_Neto"].sum()) if not df_sku_rep.empty else 0.0
-        st.sidebar.caption(
-            f"Bod {bod_m} -> Teór:{teo_b} | Cont:{cont_b} | Pend:{pend_b}\n"
-            f"Tx:{len(df_rep)} | Q_Neta:{fmt_miles_comas(q_tot, 2)} | Val:{fmt_moneda_ec(val_tot, 2)} | Dif_Neta:{fmt_moneda_ec(dif_tot, 2)}"
-        )
-        st.sidebar.download_button(
-            f"Generar Reporte Excel ({len(df_rep)})",
-            data=excel_bytes(df_rep, nac_rows=nac_rows, muestreo=muestreo_rep),
-            file_name=f"reporte_toma_fisica_{datetime.now().strftime('%Y%m%d_%H%M%S')}.xlsx",
-            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-            use_container_width=True,
-            key="btn_dl_side",
-        )
+st.sidebar.markdown("---")
 
-    modo_dup_ui = st.sidebar.radio("Si hay duplicados en Google:", ["Omitir duplicados", "Sobrescribir", "Duplicar"], key="modo_dup_in")
-    modo_dup_map = {"Omitir duplicados": "omitir", "Sobrescribir": "sobreescribir", "Duplicar": "duplicar"}
-    if st.sidebar.button("Sincronizar JSON a Google", use_container_width=True, key="btn_sync_gs"):
-        pend = cargar_json()
-        if pend:
-            con = {norm_mayus_limpio(x.get("ID_Tx", "")) for x in leer_gs()} | ids_enviados()
-            dups = sum(1 for r in pend if norm_mayus_limpio(r.get("ID_Tx", "")) in con)
-            cnt_ok, cnt_om, cnt_dup, cnt_ov = 0, 0, 0, 0
-            for r in pend:
-                ok_s, est_s, _ = enviar_gs(r, con, modo_dup=modo_dup_map[modo_dup_ui])
-                if ok_s:
-                    if est_s == "omitido":
-                        cnt_om += 1
-                    elif est_s == "duplicado":
-                        cnt_dup += 1
-                    elif est_s == "sobreescrito":
-                        cnt_ov += 1
-                    else:
-                        cnt_ok += 1
-            st.sidebar.success(f"Dups:{dups} | OK:{cnt_ok} | Omit:{cnt_om} | Dup:{cnt_dup} | Sobr:{cnt_ov}")
-        else:
-            st.sidebar.info("Sin registros locales.")
+with st.sidebar.expander("4. Sincronización GS, Excel & Limpieza", expanded=False):
+    if es_admin:
+        if not df_rep.empty:
+            st.download_button(
+                f"Generar Reporte Excel ({len(df_rep)})",
+                data=excel_bytes(df_rep, nac_rows=[], muestreo=muestreo_rep),
+                file_name=f"reporte_toma_fisica_{datetime.now().strftime('%Y%m%d_%H%M%S')}.xlsx",
+                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                use_container_width=True,
+                key="btn_dl_side",
+            )
+        modo_dup_ui = st.radio("Si hay duplicados en Google:", ["Omitir duplicados", "Sobrescribir", "Duplicar"], key="modo_dup_in")
+        modo_dup_map = {"Omitir duplicados": "omitir", "Sobrescribir": "sobreescribir", "Duplicar": "duplicar"}
+        if st.button("Sincronizar JSON a Google", use_container_width=True, key="btn_sync_gs"):
+            pend = cargar_json()
+            if pend:
+                con = {norm_mayus_limpio(x.get("ID_Tx", "")) for x in leer_gs()} | ids_enviados()
+                dups = sum(1 for r in pend if norm_mayus_limpio(r.get("ID_Tx", "")) in con)
+                cnt_ok, cnt_om, cnt_dup, cnt_ov = 0, 0, 0, 0
+                for r in pend:
+                    ok_s, est_s, _ = enviar_gs(r, con, modo_dup=modo_dup_map[modo_dup_ui])
+                    if ok_s:
+                        if est_s == "omitido":
+                            cnt_om += 1
+                        elif est_s == "duplicado":
+                            cnt_dup += 1
+                        elif est_s == "sobreescrito":
+                            cnt_ov += 1
+                        else:
+                            cnt_ok += 1
+                st.success(f"Dups:{dups} | OK:{cnt_ok} | Omit:{cnt_om} | Dup:{cnt_dup} | Sobr:{cnt_ov}")
+            else:
+                st.info("Sin registros locales.")
 
-    with st.sidebar.expander("Limpieza de Pruebas (Pre-Campo)"):
+        st.markdown("---")
         confirmar_limpieza = st.checkbox("Respaldar y limpiar JSON de pruebas", value=False, key="chk_limp_pruebas")
         if st.button("Limpiar registros de prueba", use_container_width=True, disabled=not confirmar_limpieza, key="btn_limp_pruebas"):
             carp = respaldar_y_limpiar_pruebas()
             st.session_state["cap_v"] += 1
             st.success(f"Respaldo creado en: {carp}.")
             st.rerun()
+    else:
+        st.caption("Opciones exclusivas de administrador.")
+
+st.sidebar.markdown("---")
+
+with st.sidebar.expander("5. Conexión Excel / GS & Estado de Archivos", expanded=False):
+    st.caption("Usar solo en Streamlit Cloud/móviles o si deseas cargar catálogos manualmente:")
+    st.session_state["fuente_gs_url"] = st.text_input(
+        "URL CSV/JSON Catálogo o Saldos (GS):",
+        value=st.session_state.get("fuente_gs_url", ""),
+        placeholder="https://docs.google.com/spreadsheets/d/.../export?format=csv",
+        key="fuente_gs_url_in",
+    ).strip()
+    up_pivot = st.file_uploader("Subir PIVOT (.xlsm/.xlsx):", type=["xlsm", "xlsx"], key="up_pivot_in")
+    up_nac = st.file_uploader("Subir NAC / Saldos (.xlsx):", type=["xlsx"], key="up_nac_in")
+    if st.button("Refrescar catálogos y caché", use_container_width=True, key="btn_ref_top"):
+        leer_gs.clear()
+        cargar_pivot.clear()
+        cargar_nac.clear()
+        cargar_fuente_gs_externa.clear()
+        st.rerun()
+
+dm_gs, nac_gs = cargar_fuente_gs_externa(st.session_state["fuente_gs_url"])
+dm_loc = cargar_pivot(pivot_path, up_pivot.getvalue() if up_pivot else None)
+nac_loc = cargar_nac(nac_path, up_nac.getvalue() if up_nac else None)
+
+dict_maestro = dict(dm_gs)
+for k_s, v_d in dm_loc.items():
+    dict_maestro.setdefault(k_s, {}).update(v_d)
+
+nac_rows = nac_gs if nac_gs else nac_loc
+regs_json = cargar_json()
+logs_json = cargar_logs()
+f_script = fecha_arch(RUTA_SCRIPT)
+cap_v = st.session_state["cap_v"]
 
 pend_logs_cnt = sum(1 for lg in logs_json if str(lg.get("Enviado_GS", "NO")).upper() != "SI")
 estado_cat_txt = "GS/Subido" if (nac_gs or up_pivot or up_nac) else ("Local" if os.path.exists(pivot_path) or os.path.exists(nac_path) else "No encontrado")
-st.sidebar.markdown("---")
-st.sidebar.markdown(
-    f"**Catálogo/NAC:** {estado_cat_txt} ({fmt_miles_comas(len(dict_maestro), 0)} SKUs)<br>"
-    f"**PIVOT:** {fecha_arch(pivot_path)}<br>"
-    f"**NAC:** {fecha_arch(nac_path)}<br>"
-    f"**JSON:** {fecha_arch(json_path)} ({len(regs_json)})<br>"
-    f"**Etiquetas Cola:** {len(st.session_state['cola_etiquetas'])}<br>"
-    f"**{PESTANA_LOGS_GS}:** {len(logs_json)} ({pend_logs_cnt} sin enviar)",
-    unsafe_allow_html=True,
+st.sidebar.caption(
+    f"Catálogo: {estado_cat_txt} ({fmt_miles_comas(len(dict_maestro), 0)} SKUs) | "
+    f"JSON: {len(regs_json)} | Etiquetas: {len(st.session_state['cola_etiquetas'])} | Logs: {len(logs_json)} ({pend_logs_cnt} pend.)"
 )
 
 # ==============================================================================
 # CABECERA + PESTAÑAS
 # ==============================================================================
-st.markdown('<div class="main-title">Toma Física & Muestreo V7 gPro</div>', unsafe_allow_html=True)
+st.markdown('<div class="main-title notranslate" translate="no">Toma Física & Muestreo V7 gPro</div>', unsafe_allow_html=True)
 st.caption(
     f"Script: `{RUTA_SCRIPT}` | Modificado: `{f_script}` | Periodo: `{'HABILITADO' if st.session_state['per_abierto'] else 'INHABILITADO'}` | "
     f"Cola etiquetas: `{len(st.session_state['cola_etiquetas'])}`"
@@ -1787,11 +1804,11 @@ tab_op, tab_dash, tab_etq, tab_exp = st.tabs([
 ])
 
 with tab_op:
-    st.markdown('<div class="card-box">', unsafe_allow_html=True)
+    st.markdown('<div class="card-box notranslate" translate="no">', unsafe_allow_html=True)
     if not st.session_state["per_abierto"]:
-        st.warning("Periodo INHABILITADO: habilítalo desde el panel izquierdo cuando corresponda.")
+        st.warning("Periodo INHABILITADO: habilítalo desde la carpeta 2 del panel izquierdo cuando corresponda.")
     if not nac_rows and not dict_maestro:
-        st.info("Sin fuente `PIVOT`/`NAC` conectada: configura la URL CSV/JSON de Google Sheets o sube archivos en el panel izquierdo, o digita `COD_SKU` directo.")
+        st.info("Sin fuente `PIVOT`/`NAC` conectada: configura la URL CSV/JSON en la carpeta 5 del panel izquierdo, o digita `COD_SKU` directo.")
 
     c1, c2, c3 = st.columns(3)
     ciudad = c1.selectbox("Ciudad:", ciudades, key="ciu_in")
@@ -1899,7 +1916,7 @@ with tab_op:
     if cod_sku:
         art = dict_maestro.get(cod_sku, {})
 
-        def flex(*ks):
+        def flex_exacto(*ks):
             for k in ks:
                 for ak, v in art.items():
                     if ak.strip().upper() == k.upper() and v:
@@ -1923,6 +1940,7 @@ with tab_op:
                 0.0,
             )
 
+        prov_cod = norm_mayus_limpio(flex_exacto("PROVEEDOR", "COD_PROV", "PROV"))
         prev_comp = sum(
             num_es(r.get("Q", 0), max_abs=1e12)
             for r in regs_json
@@ -1936,14 +1954,22 @@ with tab_op:
         q_acum_calc = round(float(prev_comp) + aporte_proy, 4)
         dif_proy = round(q_acum_calc - float(st_teo), 4)
         nota_proy = " (Reverso pendiente de aprobación)" if (cant < 0 and not aplica_rev_ya) else ""
-        st.info(
-            f"**SKU:** {cod_sku} | **Desc:** {flex('DESCRIPCIÓN', 'DESCRIPCION', 'DESC')} | **Und:** {flex('UNIDAD', 'UND')} | "
-            f"**Prov:** {flex('PROVEEDOR', 'SUP')} | **Costo Unit:** {fmt_moneda_ec(c_unit_vista, 4)} | "
-            f"**Acum. Anterior:** {fmt_miles_comas(prev_comp, 2)} | **Proyectado Q:** {fmt_miles_comas(q_acum_calc, 2)} | **Dif. Proy:** {fmt_miles_comas(dif_proy, 2)}{nota_proy}"
+        st.markdown(
+            f'<div class="notranslate" translate="no" style="background:#EFF6FF;border:1px solid #93C5FD;border-radius:8px;padding:10px 14px;margin-bottom:10px;font-size:14px;">'
+            f'<b>COD_SKU:</b> {html.escape(cod_sku)} &nbsp;|&nbsp; '
+            f'<b>Desc:</b> {html.escape(flex_exacto("DESCRIPCIÓN", "DESCRIPCION", "DESC"))} &nbsp;|&nbsp; '
+            f'<b>Und:</b> {html.escape(flex_exacto("UNIDAD", "UND"))} &nbsp;|&nbsp; '
+            f'<b>Cód. Proveedor:</b> <code>{html.escape(prov_cod)}</code> &nbsp;|&nbsp; '
+            f'<b>Costo Unit:</b> {fmt_moneda_ec(c_unit_vista, 4)} &nbsp;|&nbsp; '
+            f'<b>Acum. Anterior:</b> {fmt_miles_comas(prev_comp, 2)} &nbsp;|&nbsp; '
+            f'<b>Proyectado Q:</b> {fmt_miles_comas(q_acum_calc, 2)} &nbsp;|&nbsp; '
+            f'<b>Dif. Proy:</b> {fmt_miles_comas(dif_proy, 2)}{html.escape(nota_proy)}'
+            f'</div>',
+            unsafe_allow_html=True,
         )
         m1, m2 = st.columns(2)
-        m1.markdown(f'<div class="saldo-box"><span class="saldo-lbl">QSA_Teorico ({bod_norm})</span><span class="saldo-val">{fmt_miles_comas(st_teo, 0 if float(st_teo).is_integer() else 2)}</span></div>', unsafe_allow_html=True)
-        m2.markdown(f'<div class="saldo-box"><span class="saldo-lbl">Nacional</span><span class="saldo-val">{fmt_miles_comas(st_nac, 0 if float(st_nac).is_integer() else 2)}</span></div>', unsafe_allow_html=True)
+        m1.markdown(f'<div class="saldo-box notranslate" translate="no"><span class="saldo-lbl">QSA_Teorico ({bod_norm})</span><span class="saldo-val">{fmt_miles_comas(st_teo, 0 if float(st_teo).is_integer() else 2)}</span></div>', unsafe_allow_html=True)
+        m2.markdown(f'<div class="saldo-box notranslate" translate="no"><span class="saldo-lbl">Nacional</span><span class="saldo-val">{fmt_miles_comas(st_nac, 0 if float(st_nac).is_integer() else 2)}</span></div>', unsafe_allow_html=True)
 
     if btn_reg:
         firma_actual = f"{periodo_act}|{bod_norm}|{cod_sku}|{float(cant)}"
@@ -2008,6 +2034,7 @@ with tab_op:
                 q_acum_final, st_teo_r, cant, c_unit_r, est_rev=est_rev_ini
             )
             desc_r = flex_r("DESCRIPCIÓN", "DESCRIPCION", "DESC")
+            prov_r = norm_mayus_limpio(flex_r("PROVEEDOR", "COD_PROV", "PROV"))
             now = datetime.now()
             nuevo = {
                 "Periodo": periodo_act,
@@ -2023,7 +2050,7 @@ with tab_op:
                 "Motivo": motivo_final,
                 "Estado_Reverso": est_rev_ini,
                 "LINEA DE INVENTARIO": norm_mayus_limpio(flex_r("LÍNEA DE INVENTARIO", "LINEA", "INVENTARIO")),
-                "PROVEEDOR": norm_mayus_limpio(flex_r("PROVEEDOR", "SUP")),
+                "PROVEEDOR": prov_r,
                 "ALTERNO": norm_mayus_limpio(flex_r("ALTERNO", "ALT")),
                 "DESCRIPCIÓN": desc_r,
                 "UNIDAD": norm_mayus_limpio(flex_r("UNIDAD", "UND")),
@@ -2050,7 +2077,7 @@ with tab_op:
     st.markdown("---")
     st.markdown("### Últimos Registros")
     prev_df = prep_df(datos_combinados(incluir_gs=False))
-    st.markdown(tabla_md(prev_df.iloc[::-1], ["Timestamp", "Bodega", "Ubicacion", "COD_SKU", "Q", "QSA_Teorico", "DIFERENCIA", "ESTADO", "Estado_Reverso", "COSTO UNITARIO", "COSTO DIF"], 6))
+    render_tabla_segura(prev_df.iloc[::-1], ["Timestamp", "Bodega", "Ubicacion", "PROVEEDOR", "COD_SKU", "Q", "QSA_Teorico", "DIFERENCIA", "ESTADO", "Estado_Reverso", "COSTO UNITARIO", "COSTO DIF"], max_filas=6)
 
 with tab_dash:
     st.markdown("### Panorama General de Toma Física & Avance Nacional")
@@ -2092,7 +2119,7 @@ with tab_dash:
         st.divider()
 
     if df_rep.empty:
-        st.info("No hay registros que coincidan con los filtros seleccionados en el panel izquierdo.")
+        st.info("No hay registros que coincidan con los filtros seleccionados en la carpeta 3 del panel izquierdo.")
     else:
         sob_cnt = int((df_sku_rep["Estado_Neto"] == "SOBRANTE").sum()) if not df_sku_rep.empty else 0
         fal_cnt = int((df_sku_rep["Estado_Neto"] == "FALTANTE").sum()) if not df_sku_rep.empty else 0
@@ -2122,24 +2149,24 @@ with tab_dash:
             df_cus_g = (
                 df_rep[~df_rep["ESTADO"].isin(["PENDIENTE_REVERSO", "REVERSO_RECHAZADO"])]
                 .groupby("Correo_Usuario", as_index=False)
-                .agg(Transacciones=("ID_Tx", "count"), Unidades_Q=("Q", "sum"), Valor_Mov=("COSTO TOTAL", "sum"))
+                .agg(Transacciones=("ID_Tx", "count"), Unidades_Q=("Q", "sum"))
                 .sort_values("Transacciones", ascending=False)
             )
-            render_svg_barras_simples(df_cus_g, "Correo_Usuario", "Unidades_Q", "Unidades Contadas (Q) por Custodio", color_pos="#2563EB", es_moneda=False)
+            render_svg_barras_simples(df_cus_g, "Correo_Usuario", "Unidades_Q", "Totales de Unidades Contadas (Q) por Custodio", color_pos="#2563EB", es_moneda=False)
         with g2:
             df_est_g = (
                 df_sku_rep.groupby("Estado_Neto", as_index=False)
                 .agg(SKUs=("COD_SKU", "count"), Costo_Dif_Neto=("Costo_Dif_Neto", "sum"))
                 if not df_sku_rep.empty else pd.DataFrame()
             )
-            render_svg_barras_simples(df_est_g, "Estado_Neto", "Costo_Dif_Neto", "Impacto Económico Neto por Estado de SKU", color_pos="#16A34A", color_neg="#DC2626", es_moneda=True)
+            render_svg_barras_simples(df_est_g, "Estado_Neto", "Costo_Dif_Neto", "Impacto Económico Total por Estado de SKU", color_pos="#16A34A", color_neg="#DC2626", es_moneda=True)
 
         st.divider()
-        st.markdown("#### Matriz de Avance y Valoración Neta por Bodega")
+        st.markdown("#### Matriz de Avance y Valoración Total por Bodega")
         if not df_bod_av.empty:
             render_tabla_segura(
                 df_bod_av,
-                ["Bodega", "SKU_Teoricos", "SKU_Contados", "SKU_Pendientes", "Avance_Pct", "Tx", "Cantidad_Q", "Sobrantes", "Faltantes", "Cuadrados", "Costo_Total_USD", "Costo_Dif_USD"],
+                ["Bodega", "SKU_Teoricos", "SKU_Contados", "SKU_Pendientes", "Avance_Pct", "Tx", "Cantidad_Q", "QSA_Teorico_Tot", "Diferencia_Q_Tot", "Sobrantes", "Faltantes", "Cuadrados", "Costo_Total_USD", "Costo_Dif_USD"],
                 max_filas=20,
             )
         st.markdown("#### Consolidado Neto por SKU (Una fila por SKU sin duplicar diferencias)")
