@@ -13,6 +13,7 @@ import io
 import math
 import html
 import shutil
+import hashlib
 import urllib.parse
 import urllib3
 from datetime import date, datetime
@@ -77,6 +78,7 @@ BASE_DIR = os.path.dirname(RUTA_SCRIPT)
 st.session_state["errores_ui"] = []
 st.session_state.setdefault("cap_v", 0)
 st.session_state.setdefault("mem_regs", [])
+st.session_state.setdefault("pin_reverso_act", "7031")
 
 
 def resolver_ruta(win_path, rel_name):
@@ -122,12 +124,18 @@ CUSTODIO_BOD = {
 
 COLS_REP = [
     "Periodo", "ID_Tx", "Timestamp", "Correo_Usuario", "Ciudad", "Bodega",
-    "Ubicacion", "COD_SKU", "Q", "BOD/SKU", "Motivo", "LINEA DE INVENTARIO",
-    "PROVEEDOR", "ALTERNO", "DESCRIPCIÓN", "UNIDAD", "DIFERENCIA", "ESTADO",
-    "COSTO UNITARIO", "COSTO TOTAL", "COSTO DIF", "QSA_Teorico",
+    "Ubicacion", "COD_SKU", "Q", "BOD/SKU", "Motivo", "Estado_Reverso",
+    "LINEA DE INVENTARIO", "PROVEEDOR", "ALTERNO", "DESCRIPCIÓN", "UNIDAD",
+    "DIFERENCIA", "ESTADO", "COSTO UNITARIO", "COSTO TOTAL", "COSTO DIF", "QSA_Teorico",
 ]
 
 COLS_LOG_UI = ["Timestamp", "Usuario", "Error_UI", "Enviado_GS"]
+
+
+def generar_pin_tx(tx_ref, pin_base="7031"):
+    raw = f"{str(pin_base).strip()}|{str(tx_ref).strip().upper()}".encode("utf-8")
+    dig = int(hashlib.sha256(raw).hexdigest()[:6], 16) % 10000
+    return f"{dig:04d}"
 
 
 def cargar_logs():
@@ -222,9 +230,30 @@ def norm_est(v):
         return "SOBRANTE"
     if s in ["FAL", "FALTANTE"]:
         return "FALTANTE"
+    if s in ["PENDIENTE_REVERSO", "PENDIENTE_APROBACION"]:
+        return "PENDIENTE_REVERSO"
+    if s in ["REVERSO_RECHAZADO", "RECHAZADO"]:
+        return "REVERSO_RECHAZADO"
     if s in ["OK", "CUADRADO", "CUADRADO (OK)", "DE ACUERDO"]:
         return "CUADRADO (OK)"
     return s or "CUADRADO (OK)"
+
+
+def norm_estado_rev(v, q_val=0.0):
+    s = str(v or "").strip().upper()
+    if s in ["PENDIENTE_APROBACION", "PENDIENTE", "APROBADO", "RECHAZADO", "NO_APLICA"]:
+        return s
+    if float(q_val or 0.0) < 0:
+        return "PENDIENTE_APROBACION"
+    return "NO_APLICA"
+
+
+def es_computable_en_consolidado(reg):
+    q_v = num_es(reg.get("Q", 0), max_abs=1e12)
+    est_rev = norm_estado_rev(reg.get("Estado_Reverso", ""), q_v)
+    if q_v < 0 and est_rev != "APROBADO":
+        return False
+    return True
 
 
 def num_es(v, max_abs=None):
@@ -267,8 +296,13 @@ def limpiar_costo_unit(v):
     return round(c, 4) if c > 0 else 0.0
 
 
-def calcular_dif_estado_costo(q_acum, st_teo, q_actual, c_unit):
+def calcular_dif_estado_costo(q_acum, st_teo, q_actual, c_unit, est_rev="NO_APLICA"):
     c_u = limpiar_costo_unit(c_unit)
+    est_r = norm_estado_rev(est_rev, q_actual)
+    if float(q_actual) < 0 and est_r == "PENDIENTE_APROBACION":
+        return 0.0, "PENDIENTE_REVERSO", 0.0, 0.0, c_u
+    if float(q_actual) < 0 and est_r == "RECHAZADO":
+        return 0.0, "REVERSO_RECHAZADO", 0.0, 0.0, c_u
     dif_fisica = round(float(q_acum) - float(st_teo), 4)
     if dif_fisica > 0:
         estado = "SOBRANTE"
@@ -332,42 +366,131 @@ def guardar_json(reg):
     return True
 
 
-def consolidar_estado_sku_en_json(periodo_k, bod_k, sku_k, st_teo_k, dif_consol, est_consol):
+def _recalcular_lista_sku(lst, per_s, bod_s, sku_s, st_teo_k):
+    q_comp = 0.0
+    for r in lst:
+        if (
+            str(r.get("Periodo", "")).strip() == per_s
+            and norm_bod(r.get("Bodega", "")) == bod_s
+            and str(r.get("COD_SKU", "")).strip().upper() == sku_s
+            and es_computable_en_consolidado(r)
+        ):
+            q_comp = round(q_comp + num_es(r.get("Q", 0), max_abs=1e12), 4)
+
+    dif_consol = round(q_comp - float(st_teo_k), 4)
+    if dif_consol > 0:
+        est_consol = "SOBRANTE"
+        signo = 1.0
+    elif dif_consol < 0:
+        est_consol = "FALTANTE"
+        signo = -1.0
+    else:
+        est_consol = "CUADRADO (OK)"
+        signo = 0.0
+
+    camb = False
+    for r in lst:
+        if (
+            str(r.get("Periodo", "")).strip() == per_s
+            and norm_bod(r.get("Bodega", "")) == bod_s
+            and str(r.get("COD_SKU", "")).strip().upper() == sku_s
+        ):
+            q_r = num_es(r.get("Q", 0), max_abs=1e12)
+            er_r = norm_estado_rev(r.get("Estado_Reverso", ""), q_r)
+            cu = limpiar_costo_unit(r.get("COSTO UNITARIO", 0))
+            r["Estado_Reverso"] = er_r
+            r["QSA_Teorico"] = float(st_teo_k)
+            r["COSTO UNITARIO"] = cu
+            if q_r < 0 and er_r == "PENDIENTE_APROBACION":
+                r["ESTADO"] = "PENDIENTE_REVERSO"
+                r["DIFERENCIA"] = 0.0
+                r["COSTO TOTAL"] = 0.0
+                r["COSTO DIF"] = 0.0
+            elif q_r < 0 and er_r == "RECHAZADO":
+                r["ESTADO"] = "REVERSO_RECHAZADO"
+                r["DIFERENCIA"] = 0.0
+                r["COSTO TOTAL"] = 0.0
+                r["COSTO DIF"] = 0.0
+            else:
+                r["ESTADO"] = est_consol
+                r["DIFERENCIA"] = float(dif_consol)
+                r["COSTO TOTAL"] = round(cu * q_r, 2)
+                r["COSTO DIF"] = round(cu * abs(float(dif_consol)) * signo, 2)
+            camb = True
+    return camb, q_comp, dif_consol, est_consol
+
+
+def consolidar_estado_sku_en_json(periodo_k, bod_k, sku_k, st_teo_k):
     per_s = str(periodo_k or "").strip()
     bod_s = norm_bod(bod_k)
     sku_s = str(sku_k or "").strip().upper()
     if not per_s or not bod_s or not sku_s:
-        return
+        return 0.0, 0.0, "CUADRADO (OK)"
 
-    def _act_lista(lst):
-        camb = False
-        for r in lst:
-            if (
-                str(r.get("Periodo", "")).strip() == per_s
-                and norm_bod(r.get("Bodega", "")) == bod_s
-                and str(r.get("COD_SKU", "")).strip().upper() == sku_s
-            ):
-                cu = limpiar_costo_unit(r.get("COSTO UNITARIO", 0))
-                signo = 1.0 if est_consol == "SOBRANTE" else (-1.0 if est_consol == "FALTANTE" else 0.0)
-                r["QSA_Teorico"] = float(st_teo_k)
-                r["DIFERENCIA"] = float(dif_consol)
-                r["ESTADO"] = est_consol
-                r["COSTO UNITARIO"] = cu
-                r["COSTO DIF"] = round(cu * abs(float(dif_consol)) * signo, 2)
-                camb = True
-        return camb
-
+    q_comp, dif_c, est_c = 0.0, 0.0, "CUADRADO (OK)"
     if isinstance(st.session_state.get("mem_regs"), list):
-        _act_lista(st.session_state["mem_regs"])
+        _, q_comp, dif_c, est_c = _recalcular_lista_sku(st.session_state["mem_regs"], per_s, bod_s, sku_s, st_teo_k)
     try:
         if os.path.exists(json_path):
             with open(json_path, "r", encoding="utf-8") as f:
                 d = json.load(f)
-            if isinstance(d, list) and _act_lista(d):
+            if isinstance(d, list):
+                camb, q_d, dif_d, est_d = _recalcular_lista_sku(d, per_s, bod_s, sku_s, st_teo_k)
+                q_comp, dif_c, est_c = q_d, dif_d, est_d
+                if camb:
+                    with open(json_path, "w", encoding="utf-8") as f:
+                        json.dump(d, f, indent=2, ensure_ascii=False)
+    except Exception:
+        pass
+    return q_comp, dif_c, est_c
+
+
+def resolver_reverso_pendiente(tx_id, aprobar=True, admin_usr=""):
+    tx_s = str(tx_id or "").strip().upper()
+    if not tx_s:
+        return False, None
+    nuevo_est_rev = "APROBADO" if aprobar else "RECHAZADO"
+    reg_afectado = None
+
+    def _act_rev(lst):
+        nonlocal reg_afectado
+        toc = False
+        for r in lst:
+            if str(r.get("ID_Tx", "")).strip().upper() == tx_s:
+                r["Estado_Reverso"] = nuevo_est_rev
+                mot_prev = str(r.get("Motivo", "")).strip()
+                nota = f"[REV {nuevo_est_rev} por {admin_usr} {datetime.now().strftime('%Y-%m-%d %H:%M')}]"
+                if nota not in mot_prev:
+                    r["Motivo"] = f"{mot_prev} {nota}".strip()
+                reg_afectado = dict(r)
+                toc = True
+        return toc
+
+    if isinstance(st.session_state.get("mem_regs"), list):
+        _act_rev(st.session_state["mem_regs"])
+    try:
+        if os.path.exists(json_path):
+            with open(json_path, "r", encoding="utf-8") as f:
+                d = json.load(f)
+            if isinstance(d, list) and _act_rev(d):
                 with open(json_path, "w", encoding="utf-8") as f:
                     json.dump(d, f, indent=2, ensure_ascii=False)
     except Exception:
         pass
+
+    if reg_afectado is not None:
+        consolidar_estado_sku_en_json(
+            reg_afectado.get("Periodo", ""),
+            reg_afectado.get("Bodega", ""),
+            reg_afectado.get("COD_SKU", ""),
+            num_es(reg_afectado.get("QSA_Teorico", 0), max_abs=1e12),
+        )
+        for r in cargar_json():
+            if str(r.get("ID_Tx", "")).strip().upper() == tx_s:
+                reg_afectado = dict(r)
+                break
+        return True, reg_afectado
+    return False, None
 
 
 def respaldar_y_limpiar_pruebas():
@@ -452,15 +575,18 @@ def leer_gs():
 def armar_payload_gs(reg, tx_id):
     cu = limpiar_costo_unit(reg.get("COSTO UNITARIO", 0))
     q_v = num_es(reg.get("Q", 0))
+    er_v = norm_estado_rev(reg.get("Estado_Reverso", ""), q_v)
     dif_v = num_es(reg.get("DIFERENCIA", 0))
     est_v = norm_est(reg.get("ESTADO", ""))
-    signo = 1.0 if est_v == "SOBRANTE" else (-1.0 if est_v == "FALTANTE" else 0.0)
-    ct_v = round(cu * q_v, 2)
-    cd_v = round(cu * abs(dif_v) * signo, 2)
+    ct_v = num_es(reg.get("COSTO TOTAL", 0), max_abs=1e11)
+    cd_v = num_es(reg.get("COSTO DIF", 0), max_abs=1e11)
+    mot_txt = str(reg.get("Motivo", "") or "").strip()
+    if q_v < 0 and er_v not in ["", "NO_APLICA"]:
+        mot_txt = f"[{er_v}] {mot_txt}".strip()
     return [
         reg.get("Periodo", ""), tx_id, reg.get("Timestamp", ""), reg.get("Correo_Usuario", ""),
         reg.get("Ciudad", ""), fmt_txt(norm_bod(reg.get("Bodega", ""))), reg.get("Ubicacion", ""),
-        fmt_txt(reg.get("COD_SKU", "")), q_v, reg.get("BOD/SKU", ""), reg.get("Motivo", ""),
+        fmt_txt(reg.get("COD_SKU", "")), q_v, reg.get("BOD/SKU", ""), mot_txt,
         reg.get("LINEA DE INVENTARIO", ""), reg.get("PROVEEDOR", ""), fmt_txt(reg.get("ALTERNO", "")),
         reg.get("DESCRIPCIÓN", ""), reg.get("UNIDAD", ""), dif_v, est_v,
         cu, ct_v, cd_v, num_es(reg.get("QSA_Teorico", 0)),
@@ -534,6 +660,7 @@ def prep_df(regs):
     df["ESTADO"] = df["ESTADO"].apply(norm_est)
     for nc in ["Q", "QSA_Teorico", "DIFERENCIA"]:
         df[nc] = df[nc].apply(lambda x: num_es(x, max_abs=1e12))
+    df["Estado_Reverso"] = [norm_estado_rev(er, qv) for er, qv in zip(df["Estado_Reverso"], df["Q"])]
     df["COSTO UNITARIO"] = df["COSTO UNITARIO"].apply(limpiar_costo_unit)
     df["COSTO TOTAL"] = df["COSTO TOTAL"].apply(lambda x: num_es(x, max_abs=1e11))
     df["COSTO DIF"] = df["COSTO DIF"].apply(lambda x: num_es(x, max_abs=1e11))
@@ -620,16 +747,17 @@ def construir_metricas_avance(df, nac_rows, muestreo=True):
         return []
     filas = []
     for (per_k, bod_k, cus_k), grp in df.groupby(["Periodo", "Bodega", "Correo_Usuario"]):
+        grp_ok = grp[~grp["ESTADO"].isin(["PENDIENTE_REVERSO", "REVERSO_RECHAZADO"])]
         teo_skus = contar_teoricos_bodega(nac_rows, bod_k, muestreo=muestreo)
-        cont_skus = int(grp["COD_SKU"].nunique())
+        cont_skus = int(grp_ok["COD_SKU"].nunique())
         pend_skus = max(teo_skus - cont_skus, 0) if teo_skus > 0 else 0
         pct_avance = round((cont_skus / teo_skus) * 100.0, 2) if teo_skus > 0 else 0.0
         filas.append([
-            str(per_k), str(bod_k), str(cus_k), int(len(grp)), int(teo_skus), int(cont_skus),
-            int(pend_skus), float(pct_avance), round(float(grp["Q"].sum()), 2),
-            int((grp["ESTADO"] == "SOBRANTE").sum()), int((grp["ESTADO"] == "FALTANTE").sum()),
-            int((grp["ESTADO"] == "CUADRADO (OK)").sum()), round(float(grp["COSTO TOTAL"].sum()), 2),
-            round(float(grp["COSTO DIF"].sum()), 2),
+            str(per_k), str(bod_k), str(cus_k), int(len(grp_ok)), int(teo_skus), int(cont_skus),
+            int(pend_skus), float(pct_avance), round(float(grp_ok["Q"].sum()), 2),
+            int((grp_ok["ESTADO"] == "SOBRANTE").sum()), int((grp_ok["ESTADO"] == "FALTANTE").sum()),
+            int((grp_ok["ESTADO"] == "CUADRADO (OK)").sum()), round(float(grp_ok["COSTO TOTAL"].sum()), 2),
+            round(float(grp_ok["COSTO DIF"].sum()), 2),
         ])
     return filas
 
@@ -638,12 +766,13 @@ def construir_resumen_bodega(df, nac_rows, muestreo=True, bodega_filtro="TODAS")
     bodegas_iter = [norm_bod(bodega_filtro)] if bodega_filtro != "TODAS" else BODEGAS_OFICIALES
     filas = []
     for bod_k in bodegas_iter:
-        grp = df[df["Bodega"] == bod_k] if not df.empty else pd.DataFrame(columns=COLS_REP)
+        grp_all = df[df["Bodega"] == bod_k] if not df.empty else pd.DataFrame(columns=COLS_REP)
+        grp = grp_all[~grp_all["ESTADO"].isin(["PENDIENTE_REVERSO", "REVERSO_RECHAZADO"])] if not grp_all.empty else grp_all
         teo_skus = contar_teoricos_bodega(nac_rows, bod_k, muestreo=muestreo)
         cont_skus = int(grp["COD_SKU"].nunique()) if not grp.empty else 0
         pend_skus = max(teo_skus - cont_skus, 0) if teo_skus > 0 else 0
         pct_avance = round((cont_skus / teo_skus) * 100.0, 1) if teo_skus > 0 else 0.0
-        if not grp.empty or bodega_filtro != "TODAS":
+        if not grp_all.empty or bodega_filtro != "TODAS":
             filas.append({
                 "Bodega": bod_k, "SKU_Teoricos": teo_skus, "SKU_Contados": cont_skus,
                 "SKU_Pendientes": pend_skus, "Avance_Pct": pct_avance, "Tx": int(len(grp)),
@@ -655,6 +784,38 @@ def construir_resumen_bodega(df, nac_rows, muestreo=True, bodega_filtro="TODAS")
                 "Costo_Dif_USD": round(float(grp["COSTO DIF"].sum()), 2) if not grp.empty else 0.0,
             })
     return pd.DataFrame(filas)
+
+
+def render_graficos_tomas_y_auditoria(df_of, df_bod_av):
+    st.markdown("#### Gráficos Visuales: Auditado vs. Por Auditar y Evolución de Tomas")
+    cg1, cg2 = st.columns(2)
+
+    with cg1:
+        st.markdown("**Auditado vs. Por Auditar por Bodega (SKUs)**")
+        if df_bod_av is not None and not df_bod_av.empty:
+            df_bar_aud = df_bod_av.set_index("Bodega")[["SKU_Contados", "SKU_Pendientes"]]
+            df_bar_aud.columns = ["Auditado (SKUs)", "Por Auditar (SKUs)"]
+            st.bar_chart(df_bar_aud, height=250)
+        else:
+            st.info("Sin datos de bodega para graficar.")
+
+    with cg2:
+        st.markdown("**Evolución de Tomas y % Acumulado (1.ª, 2.ª, 3.ª toma...)**")
+        if df_of is not None and not df_of.empty:
+            df_t = df_of.sort_values("Timestamp").reset_index(drop=True)
+            df_t["Toma"] = [f"Toma {i + 1}" for i in range(len(df_t))]
+            df_t["Cant_Toma"] = df_t["Q"].astype(float)
+            tot_q = float(df_t["Cant_Toma"].sum())
+            if tot_q != 0:
+                df_t["Pct_Toma"] = ((df_t["Cant_Toma"] / tot_q) * 100.0).round(2)
+                df_t["Pct_Acum"] = ((df_t["Cant_Toma"].cumsum() / tot_q) * 100.0).round(2)
+            else:
+                df_t["Pct_Toma"] = 0.0
+                df_t["Pct_Acum"] = 0.0
+            st.line_chart(df_t.set_index("Toma")[["Cant_Toma", "Pct_Acum"]], height=250)
+            st.caption(f"Total acumulado en tomas: **{tot_q:g}** (= 100% en última toma) | Última toma: **{df_t['Pct_Acum'].iloc[-1]:.1f}%** acumulado.")
+        else:
+            st.info("Sin tomas computables para graficar.")
 
 
 def render_lista_visual(df_plot, label_col, val_cols, titulo=""):
@@ -941,6 +1102,7 @@ if "per_abierto" not in st.session_state:
     st.session_state["per_abierto"] = True
 if es_admin:
     st.session_state["per_abierto"] = st.sidebar.toggle("Periodo abierto (Admin)", value=st.session_state["per_abierto"], key="per_abierto_tgl")
+    st.session_state["pin_reverso_act"] = st.sidebar.text_input("PIN Base Reversos (Admin):", value=st.session_state["pin_reverso_act"], key="pin_rev_admin_in").strip()
 else:
     st.sidebar.caption("Estado periodo: " + ("ABIERTO" if st.session_state["per_abierto"] else "CERRADO"))
 
@@ -1029,6 +1191,7 @@ if st.sidebar.button("Refrescar estadísticas", use_container_width=True, key="b
     leer_gs.clear()
     cargar_pivot.clear()
     cargar_nac.clear()
+    st.rerun()
 
 df_rep = df_base_rep.copy()
 if not df_rep.empty:
@@ -1054,12 +1217,13 @@ if es_admin:
     st.sidebar.markdown("### Métricas & Sync (Superusuario)")
     if not df_rep.empty:
         bod_m = bod_norm if f_bod == "TODAS" else norm_bod(f_bod)
+        df_rep_ok = df_rep[~df_rep["ESTADO"].isin(["PENDIENTE_REVERSO", "REVERSO_RECHAZADO"])]
         teo_b = contar_teoricos_bodega(nac_rows, bod_m, muestreo=muestreo_rep)
-        cont_b = int(df_rep[df_rep["Bodega"] == bod_m]["COD_SKU"].nunique())
+        cont_b = int(df_rep_ok[df_rep_ok["Bodega"] == bod_m]["COD_SKU"].nunique())
         pend_b = max(teo_b - cont_b, 0) if teo_b > 0 else 0
-        q_tot = float(df_rep["Q"].sum())
-        val_tot = float(df_rep["COSTO TOTAL"].sum())
-        dif_tot = float(df_rep["COSTO DIF"].sum())
+        q_tot = float(df_rep_ok["Q"].sum())
+        val_tot = float(df_rep_ok["COSTO TOTAL"].sum())
+        dif_tot = float(df_rep_ok["COSTO DIF"].sum())
         st.sidebar.caption(
             f"Bod {bod_m} -> Teór:{teo_b} | Cont:{cont_b} | Pend:{pend_b}\n"
             f"Tx:{len(df_rep)} | Q:{q_tot:g} | Val:USD {val_tot:,.2f} | Dif:USD {dif_tot:,.2f}"
@@ -1123,6 +1287,16 @@ st.caption(f"Script: `{RUTA_SCRIPT}` | Modificado: `{f_script}` | {PESTANA_LOGS_
 if st.session_state["errores_ui"]:
     st.warning("Incidencias registradas en esta sesión: " + " || ".join(st.session_state["errores_ui"][-2:]))
 
+reversos_pend_all = [
+    r for r in regs_json
+    if num_es(r.get("Q", 0), max_abs=1e12) < 0 and norm_estado_rev(r.get("Estado_Reverso", ""), r.get("Q", 0)) == "PENDIENTE_APROBACION"
+]
+if es_admin and reversos_pend_all:
+    st.warning(
+        f"Notificación en bandeja Admin: tienes **{len(reversos_pend_all)}** reverso(s) pendiente(s) de autorización. "
+        "Revísalos en la pestaña *Dashboard Estadístico & Avance Visual* -> *Autorización de Reversos Pendientes*."
+    )
+
 tab_op, tab_dash, tab_exp = st.tabs([
     "Operación y Captura de Campo",
     "Dashboard Estadístico & Avance Visual",
@@ -1146,7 +1320,7 @@ with tab_op:
     ya_aud = {
         str(r.get("COD_SKU", "")).strip().upper()
         for r in regs_json
-        if str(r.get("Periodo", "")).strip() == periodo_act and norm_bod(r.get("Bodega", "")) == bod_norm
+        if str(r.get("Periodo", "")).strip() == periodo_act and norm_bod(r.get("Bodega", "")) == bod_norm and es_computable_en_consolidado(r)
     }
 
     skus_unicos, desc_map = obtener_skus_teoricos_bodega(nac_rows, dict_maestro, bod_norm, muestreo=muestreo)
@@ -1173,7 +1347,23 @@ with tab_op:
     c4, c5, c6 = st.columns([2.5, 1.5, 1])
     cod_sku = c4.text_input("COD_SKU:", value=pre_sku, key=f"sku_{bod_norm}_{cap_v}").strip().upper()
     cant = c5.number_input("Cantidad (Q):", step=1, value=1, key=f"q_{bod_norm}_{cap_v}")
-    motivo = st.text_input("Motivo Reverso (Col K obligatorio si Q < 0):", key=f"mot_{bod_norm}_{cap_v}").strip().upper() if cant < 0 else ""
+    motivo = ""
+    pin_ingresado = ""
+    pin_valido_cust = False
+
+    if cant < 0:
+        r_m1, r_m2 = st.columns([2.2, 1.3])
+        motivo = r_m1.text_input("Motivo Reverso (Col K obligatorio si Q < 0):", key=f"mot_{bod_norm}_{cap_v}").strip().upper()
+        if not es_admin:
+            pin_ref_sku = generar_pin_tx(f"{periodo_act}|{bod_norm}|{cod_sku}", st.session_state["pin_reverso_act"])
+            pin_ingresado = r_m2.text_input("PIN Autorización (opcional):", max_chars=6, key=f"pin_{bod_norm}_{cap_v}").strip()
+            pin_valido_cust = bool(pin_ingresado) and (pin_ingresado == pin_ref_sku or pin_ingresado == str(st.session_state["pin_reverso_act"]).strip())
+            if pin_ingresado and not pin_valido_cust:
+                st.warning("PIN incorrecto: el reverso se registrará como **PENDIENTE_APROBACION** para revisión del admin.")
+            elif pin_valido_cust:
+                st.success("PIN válido: reverso autorizado y aplicado al consolidado.")
+            else:
+                st.info("Sin PIN ingresado: el reverso queda **PENDIENTE_APROBACION** en la bandeja del administrador.")
 
     c6.write("")
     c6.write("")
@@ -1225,17 +1415,23 @@ with tab_op:
                 0.0,
             )
 
-        prev = sum(
+        prev_comp = sum(
             num_es(r.get("Q", 0), max_abs=1e12)
             for r in regs_json
-            if str(r.get("Periodo", "")).strip() == periodo_act and norm_bod(r.get("Bodega", "")) == bod_norm and str(r.get("COD_SKU", "")).strip().upper() == cod_sku
+            if str(r.get("Periodo", "")).strip() == periodo_act
+            and norm_bod(r.get("Bodega", "")) == bod_norm
+            and str(r.get("COD_SKU", "")).strip().upper() == cod_sku
+            and es_computable_en_consolidado(r)
         )
-        q_acum_calc = round(float(prev) + float(cant), 4)
+        aplica_rev_ya = (cant >= 0) or es_admin or pin_valido_cust
+        aporte_proy = float(cant) if aplica_rev_ya else 0.0
+        q_acum_calc = round(float(prev_comp) + aporte_proy, 4)
         dif_proy = round(q_acum_calc - float(st_teo), 4)
+        nota_proy = " (Reverso pendiente de aprobación)" if (cant < 0 and not aplica_rev_ya) else ""
         st.info(
             f"**SKU:** {cod_sku} | **Desc:** {flex('DESCRIPCIÓN', 'DESCRIPCION', 'DESC')} | **Und:** {flex('UNIDAD', 'UND')} | "
             f"**Prov:** {flex('PROVEEDOR', 'SUP', 'FABRICANTE')} | **Costo Unit (W):** ${c_unit_vista:,.4f} | "
-            f"**Previo Bod:** {prev:g} | **Acumulado Q:** {q_acum_calc:g} | **Dif. Acum:** {dif_proy:g}"
+            f"**Acum. Oficial Prev:** {prev_comp:g} | **Proyectado Q:** {q_acum_calc:g} | **Dif. Proy:** {dif_proy:g}{nota_proy}"
         )
         m1, m2 = st.columns(2)
         m1.markdown(f'<div class="saldo-box"><span class="saldo-lbl">QSA_Teorico ({bod_norm})</span><span class="saldo-val">{st_teo:g}</span></div>', unsafe_allow_html=True)
@@ -1268,13 +1464,30 @@ with tab_op:
                 0.0,
             )
 
-        prev = sum(
+        prev_comp = sum(
             num_es(r.get("Q", 0), max_abs=1e12)
             for r in regs_json
-            if str(r.get("Periodo", "")).strip() == periodo_act and norm_bod(r.get("Bodega", "")) == bod_norm and str(r.get("COD_SKU", "")).strip().upper() == cod_sku
+            if str(r.get("Periodo", "")).strip() == periodo_act
+            and norm_bod(r.get("Bodega", "")) == bod_norm
+            and str(r.get("COD_SKU", "")).strip().upper() == cod_sku
+            and es_computable_en_consolidado(r)
         )
-        q_acum_final = round(float(prev) + float(cant), 4)
-        dif_f, est_f, costo_total, costo_dif, c_unit_limpio = calcular_dif_estado_costo(q_acum_final, st_teo_r, cant, c_unit_r)
+        motivo_final = motivo
+        if cant < 0:
+            if es_admin:
+                est_rev_ini = "APROBADO"
+            elif pin_valido_cust:
+                est_rev_ini = "APROBADO"
+                motivo_final = f"{motivo} [PIN_AUTORIZADO]".strip()
+            else:
+                est_rev_ini = "PENDIENTE_APROBACION"
+        else:
+            est_rev_ini = "NO_APLICA"
+
+        q_acum_final = round(float(prev_comp) + (float(cant) if est_rev_ini != "PENDIENTE_APROBACION" else 0.0), 4)
+        dif_f, est_f, costo_total, costo_dif, c_unit_limpio = calcular_dif_estado_costo(
+            q_acum_final, st_teo_r, cant, c_unit_r, est_rev=est_rev_ini
+        )
         now = datetime.now()
         nuevo = {
             "Periodo": periodo_act,
@@ -1287,7 +1500,8 @@ with tab_op:
             "COD_SKU": cod_sku,
             "Q": float(cant),
             "BOD/SKU": f"{bod_norm}-{cod_sku}",
-            "Motivo": motivo,
+            "Motivo": motivo_final,
+            "Estado_Reverso": est_rev_ini,
             "LINEA DE INVENTARIO": flex_r("LÍNEA DE INVENTARIO", "LINEA", "INVENTARIO"),
             "PROVEEDOR": flex_r("PROVEEDOR", "SUP", "FABRICANTE"),
             "ALTERNO": flex_r("ALTERNO", "ALT"),
@@ -1301,16 +1515,19 @@ with tab_op:
             "QSA_Teorico": float(st_teo_r),
         }
         if guardar_json(nuevo):
-            consolidar_estado_sku_en_json(periodo_act, bod_norm, cod_sku, st_teo_r, dif_f, est_f)
+            consolidar_estado_sku_en_json(periodo_act, bod_norm, cod_sku, st_teo_r)
             ok_g, est_g, tx_g = enviar_gs(nuevo)
             st.session_state["cap_v"] += 1
-            st.success(f"Guardado {cod_sku} ({cant:g} | Acum {q_acum_final:g}) -> {est_f} (Dif {dif_f:g} | Costo U ${c_unit_limpio:,.4f}) | GS: {est_g} ({tx_g})" if ok_g else f"Guardado local OK | GS: {est_g}")
+            if est_rev_ini == "PENDIENTE_APROBACION":
+                st.success(f"Reverso registrado en cola de aprobación ({cod_sku}, Q {cant:g}) -> PENDIENTE_REVERSO | GS: {est_g} ({tx_g})" if ok_g else f"Reverso guardado en cola local | GS: {est_g}")
+            else:
+                st.success(f"Guardado {cod_sku} ({cant:g} | Acum {q_acum_final:g}) -> {est_f} (Dif {dif_f:g} | Costo U ${c_unit_limpio:,.4f}) | GS: {est_g} ({tx_g})" if ok_g else f"Guardado local OK | GS: {est_g}")
             st.rerun()
 
     st.markdown("---")
     st.markdown("### Últimos Registros")
     prev_df = prep_df(datos_combinados(incluir_gs=False))
-    st.markdown(tabla_md(prev_df.iloc[::-1], ["Timestamp", "Bodega", "Ubicacion", "COD_SKU", "Q", "QSA_Teorico", "DIFERENCIA", "ESTADO", "COSTO UNITARIO", "COSTO DIF"], 6))
+    st.markdown(tabla_md(prev_df.iloc[::-1], ["Timestamp", "Bodega", "Ubicacion", "COD_SKU", "Q", "QSA_Teorico", "DIFERENCIA", "ESTADO", "Estado_Reverso", "COSTO UNITARIO", "COSTO DIF"], 6))
 
 with tab_dash:
     st.markdown("### Panorama General de Toma Física & Avance Nacional")
@@ -1319,33 +1536,73 @@ with tab_dash:
         f"**Filtros:** Periodo `{f_per}` | Bodega `{f_bod}` | Ciudad `{f_ciu}` | Custodio `{f_cus}` | SKU `{f_sku}` | Prov `{f_prv}`"
     )
 
+    if es_admin:
+        pend_rev_df = df_base_rep[
+            (df_base_rep["Q"] < 0) & (df_base_rep["Estado_Reverso"] == "PENDIENTE_APROBACION")
+        ] if not df_base_rep.empty else pd.DataFrame(columns=COLS_REP)
+        st.markdown("#### Autorización de Reversos Pendientes (Superusuario)")
+        if pend_rev_df.empty:
+            st.caption("No hay reversos pendientes de aprobación en este momento.")
+        else:
+            render_tabla_segura(
+                pend_rev_df.iloc[::-1],
+                ["ID_Tx", "Timestamp", "Periodo", "Bodega", "COD_SKU", "Q", "QSA_Teorico", "COSTO UNITARIO", "Correo_Usuario", "Motivo"],
+                max_filas=20,
+                key_suf="rev_pend_tbl",
+            )
+            lista_tx_pend = [str(x).strip().upper() for x in pend_rev_df["ID_Tx"].tolist() if str(x).strip()]
+            sel_tx_rev = st.selectbox("Seleccionar reverso pendiente:", lista_tx_pend, key="sel_tx_rev_admin")
+            pin_sugerido = generar_pin_tx(sel_tx_rev, st.session_state["pin_reverso_act"])
+            st.caption(f"PIN sugerido para `{sel_tx_rev}`: **`{pin_sugerido}`** (o PIN base `{st.session_state['pin_reverso_act']}`)")
+            r_col1, r_col2 = st.columns(2)
+            if r_col1.button("Aprobar Reverso", use_container_width=True, key="btn_aprobar_rev"):
+                ok_r, reg_mod = resolver_reverso_pendiente(sel_tx_rev, aprobar=True, admin_usr=usuario)
+                if ok_r and reg_mod is not None:
+                    enviar_gs(reg_mod, modo_dup="sobreescribir")
+                    st.success(f"Reverso {sel_tx_rev} aprobado y consolidado aplicado.")
+                    st.rerun()
+            if r_col2.button("Rechazar Reverso", use_container_width=True, key="btn_rechazar_rev"):
+                ok_r, reg_mod = resolver_reverso_pendiente(sel_tx_rev, aprobar=False, admin_usr=usuario)
+                if ok_r and reg_mod is not None:
+                    enviar_gs(reg_mod, modo_dup="sobreescribir")
+                    st.info(f"Reverso {sel_tx_rev} rechazado; no altera el consolidado oficial.")
+                    st.rerun()
+        st.divider()
+
     if df_rep.empty:
         st.info("No hay registros que coincidan con los filtros seleccionados en el panel izquierdo.")
     else:
-        sob_cnt = int((df_rep["ESTADO"] == "SOBRANTE").sum())
-        fal_cnt = int((df_rep["ESTADO"] == "FALTANTE").sum())
-        ok_cnt = int((df_rep["ESTADO"] == "CUADRADO (OK)").sum())
+        df_rep_of = df_rep[~df_rep["ESTADO"].isin(["PENDIENTE_REVERSO", "REVERSO_RECHAZADO"])]
+        sob_cnt = int((df_rep_of["ESTADO"] == "SOBRANTE").sum())
+        fal_cnt = int((df_rep_of["ESTADO"] == "FALTANTE").sum())
+        ok_cnt = int((df_rep_of["ESTADO"] == "CUADRADO (OK)").sum())
+        pend_r_cnt = int((df_rep["ESTADO"] == "PENDIENTE_REVERSO").sum())
 
         k1, k2, k3, k4, k5 = st.columns(5)
         k1.metric("Transacciones (Tx)", f"{len(df_rep):,}")
-        k2.metric("SKUs Únicos Contados", f"{df_rep['COD_SKU'].nunique():,}")
-        k3.metric("Cantidad Física (Q)", f"{df_rep['Q'].sum():,.2f}")
-        k4.metric("Valor Contado (USD)", f"${df_rep['COSTO TOTAL'].sum():,.2f}")
-        k5.metric("Impacto Dif. (USD)", f"${df_rep['COSTO DIF'].sum():,.2f}")
+        k2.metric("SKUs Únicos Contados", f"{df_rep_of['COD_SKU'].nunique():,}")
+        k3.metric("Cantidad Física (Q)", f"{df_rep_of['Q'].sum():,.2f}")
+        k4.metric("Valor Contado (USD)", f"${df_rep_of['COSTO TOTAL'].sum():,.2f}")
+        k5.metric("Impacto Dif. (USD)", f"${df_rep_of['COSTO DIF'].sum():,.2f}")
 
-        st.markdown(f"**Estados en filtro:** &nbsp; **SOBRANTE:** `{sob_cnt}` &nbsp;|&nbsp; **FALTANTE:** `{fal_cnt}` &nbsp;|&nbsp; **CUADRADO (OK):** `{ok_cnt}`")
+        st.markdown(
+            f"**Estados en filtro:** &nbsp; **SOBRANTE:** `{sob_cnt}` &nbsp;|&nbsp; **FALTANTE:** `{fal_cnt}` "
+            f"&nbsp;|&nbsp; **CUADRADO (OK):** `{ok_cnt}` &nbsp;|&nbsp; **PENDIENTE_REVERSO:** `{pend_r_cnt}`"
+        )
+        df_bod_av = construir_resumen_bodega(df_rep, nac_rows, muestreo=muestreo_rep, bodega_filtro=f_bod)
+        st.divider()
+        render_graficos_tomas_y_auditoria(df_rep_of, df_bod_av)
         st.divider()
         g1, g2 = st.columns(2)
         with g1:
-            df_bod_av = construir_resumen_bodega(df_rep, nac_rows, muestreo=muestreo_rep, bodega_filtro=f_bod)
             render_lista_visual(df_bod_av, "Bodega", ["SKU_Contados", "SKU_Pendientes", "SKU_Teoricos", "Avance_Pct"], "Avance de SKUs por Bodega (Contados vs Pendientes)")
         with g2:
-            df_cus_g = df_rep.groupby("Correo_Usuario", as_index=False).agg(Transacciones=("ID_Tx", "count"), Unidades_Q=("Q", "sum"), Costo_Dif_USD=("COSTO DIF", "sum")).sort_values("Transacciones", ascending=False)
+            df_cus_g = df_rep_of.groupby("Correo_Usuario", as_index=False).agg(Transacciones=("ID_Tx", "count"), Unidades_Q=("Q", "sum"), Costo_Dif_USD=("COSTO DIF", "sum")).sort_values("Transacciones", ascending=False)
             render_lista_visual(df_cus_g, "Correo_Usuario", ["Transacciones", "Unidades_Q", "Costo_Dif_USD"], "Actividad por Custodio (Tx y Unidades Q)")
         st.divider()
         g3, g4 = st.columns(2)
         with g3:
-            df_ciu_g = df_rep.groupby("Ciudad", as_index=False).agg(Transacciones=("ID_Tx", "count"), Unidades_Q=("Q", "sum"), Costo_Dif_USD=("COSTO DIF", "sum")).sort_values("Unidades_Q", ascending=False)
+            df_ciu_g = df_rep_of.groupby("Ciudad", as_index=False).agg(Transacciones=("ID_Tx", "count"), Unidades_Q=("Q", "sum"), Costo_Dif_USD=("COSTO DIF", "sum")).sort_values("Unidades_Q", ascending=False)
             render_lista_visual(df_ciu_g, "Ciudad", ["Transacciones", "Unidades_Q", "Costo_Dif_USD"], "Distribución por Ciudad (Tx y Unidades Q)")
         with g4:
             df_est_g = df_rep.groupby("ESTADO", as_index=False).agg(Registros=("ID_Tx", "count"), Unidades_Q=("Q", "sum"), Costo_Dif_USD=("COSTO DIF", "sum"))
@@ -1362,7 +1619,7 @@ with tab_dash:
         st.markdown("#### Detalle Filtrado (SKU, Proveedor, Cantidades y Diferencia)")
         render_tabla_segura(
             df_rep.iloc[::-1],
-            ["Timestamp", "Correo_Usuario", "Ciudad", "Bodega", "PROVEEDOR", "COD_SKU", "Q", "QSA_Teorico", "DIFERENCIA", "ESTADO", "COSTO UNITARIO", "COSTO DIF"],
+            ["Timestamp", "Correo_Usuario", "Ciudad", "Bodega", "PROVEEDOR", "COD_SKU", "Q", "QSA_Teorico", "DIFERENCIA", "ESTADO", "Estado_Reverso", "COSTO UNITARIO", "COSTO DIF"],
             max_filas=30,
             key_suf="dash_det_filt",
         )
