@@ -71,7 +71,7 @@ st.markdown(
         background: #0F172A; color: #FFFFFF !important; padding: 14px 18px; border-radius: 10px;
         font-size: 20px !important; font-weight: 800; border-bottom: 4px solid #F59E0B; margin-bottom: 8px;
     }
-    .card-box { background: #FFFFFF !important; border: 1px solid #CBD5E1; border-radius: 10px; padding: 14px; margin-bottom: 12px; color: #0F172A !important; }
+    .card-box { background: #FFFFFF !important; border: 1px solid #CBD5E1; border-radius: 10px; padding: 14px; margin-bottom: 12px; color: #0F172A !important; max-width: 100%; box-sizing: border-box; }
     .stTextInput input, .stNumberInput input, [data-testid="stMain"] [data-baseweb="select"] > div {
         background-color: #FEF3C7 !important; color: #451A03 !important; font-weight: 700 !important; border: 2px solid #D97706 !important;
     }
@@ -89,10 +89,6 @@ st.markdown(
     .chart-title {
         font-size: 17px !important; font-weight: 800 !important; color: #0F172A !important; margin-bottom: 8px;
     }
-    .guia-sku-box {
-        background: #F1F5F9; border: 1px solid #CBD5E1; border-radius: 8px; padding: 8px 12px;
-        margin-top: 6px; margin-bottom: 8px; font-size: 13px; color: #0F172A;
-    }
     table.tf-table { width: 100%; border-collapse: collapse; background: #FFFFFF; }
     table.tf-table thead th {
         background-color: #0F172A !important; color: #FFFFFF !important; padding: 8px 10px !important;
@@ -107,7 +103,6 @@ st.markdown(
     unsafe_allow_html=True,
 )
 
-# Evita que Chrome/Edge traduzca siglas como "VP" -> "Vicepresidente" o "COD_SKU" -> "SKU del pago"
 components.html(
     """
     <script>
@@ -162,6 +157,12 @@ def fmt_miles_comas(val, dec=2):
 
 def fmt_moneda_ec(val, dec=2):
     return f"USD {fmt_miles_comas(val, dec=dec)}"
+
+
+def formatear_ec_numero_str(valor, decimales=2):
+    """Formatea valores numéricos o de texto al estándar Ecuador: 0,00 / 1.000,00."""
+    val = num_es(valor, max_abs=1e14)
+    return fmt_miles_comas(val, dec=decimales)
 
 
 def resolver_ruta(win_path, rel_name):
@@ -1163,16 +1164,6 @@ def render_graficos_avance_operativo(df_sku_consol, df_bod_av):
         "Valor Total Contado", "Impacto Dif. Neto",
         color_a="#0284C7", color_b="#F59E0B", es_moneda=True,
     )
-    df_tot_nac = pd.DataFrame([
-        {"Concepto": "SKUs Teóricos", "Total": float(df_bod_av["SKU_Teoricos"].sum())},
-        {"Concepto": "SKUs Contados", "Total": float(df_bod_av["SKU_Contados"].sum())},
-        {"Concepto": "SKUs Pendientes", "Total": float(df_bod_av["SKU_Pendientes"].sum())},
-    ])
-    render_svg_barras_simples(
-        df_tot_nac, "Concepto", "Total",
-        "Consolidado Global de Cobertura de SKUs (Filtro Activo)",
-        color_pos="#0F172A", es_moneda=False,
-    )
 
 
 def render_tabla_segura(df_in, cols, max_filas=50):
@@ -1825,18 +1816,49 @@ with tab_op:
     pre_sku = norm_mayus_limpio(sel_combo.split(" | ")[0]) if sel_combo != "-- SELECCIONE O ESCANEE SKU --" else ""
 
     if skus_unicos:
-        vista_muestra_html = []
-        for s_item in skus_unicos[:8]:
-            d_item = html.escape(desc_map.get(s_item, "")[:34])
-            if s_item in ya_aud:
-                est_badge = "<b>[AUDITADO]</b>"
-            else:
-                est_badge = "[PENDIENTE]"
-            vista_muestra_html.append(f"<code>{html.escape(s_item)}</code> {est_badge} {d_item}")
-        st.markdown(
-            f'<div class="guia-sku-box"><b>Vista de estados teóricos (muestra):</b> ' + " &nbsp;•&nbsp; ".join(vista_muestra_html) + "</div>",
-            unsafe_allow_html=True,
+        muestra_opts = ["-- VISTA ESTADOS TEÓRICOS (MUESTRA) --"] + [
+            f"{s_item}  |  {'[AUDITADO]' if s_item in ya_aud else '[PENDIENTE]'}  |  {desc_map.get(s_item, '')[:42]}"
+            for s_item in skus_unicos[:25]
+        ]
+        sel_muestra = st.selectbox(
+            "Vista de estados teóricos (muestra):",
+            muestra_opts,
+            key=f"mues_{bod_norm}_{cap_v}",
         )
+        if sel_muestra != "-- VISTA ESTADOS TEÓRICOS (MUESTRA) --":
+            sku_m = norm_mayus_limpio(sel_muestra.split("  |  ")[0])
+            if sku_m and not pre_sku:
+                pre_sku = sku_m
+
+    # Estiliza en negrilla las opciones [AUDITADO] dentro de los desplegables nativos
+    components.html(
+        """
+        <script>
+        (function() {
+          function aplicarNegrillaAuditado() {
+            try {
+              const doc = window.parent.document;
+              const items = doc.querySelectorAll('li[role="option"], [data-baseweb="menu"] li, [data-baseweb="popover"] li, option');
+              items.forEach(el => {
+                const txt = (el.textContent || "");
+                if (txt.includes("[AUDITADO]")) {
+                  el.style.fontWeight = "900";
+                  el.style.color = "#0F172A";
+                  el.querySelectorAll("span, div").forEach(ch => {
+                    ch.style.fontWeight = "900";
+                  });
+                }
+              });
+            } catch (e) {}
+          }
+          aplicarNegrillaAuditado();
+          const obs = new MutationObserver(aplicarNegrillaAuditado);
+          try { obs.observe(window.parent.document.body, { childList: true, subtree: true }); } catch (e) {}
+        })();
+        </script>
+        """,
+        height=0,
+    )
 
     sku_detectado_foto = ""
     with st.expander("Cámara: Lector de Código de Barras (ZXing) & Foto Evidencia con Lectura"):
