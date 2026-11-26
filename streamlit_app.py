@@ -10,6 +10,7 @@
 import os
 import json
 import io
+import math
 import html
 import shutil
 import urllib.parse
@@ -19,6 +20,7 @@ import openpyxl
 from openpyxl.styles import Font, PatternFill, Alignment
 import requests
 import streamlit as st
+import streamlit.components.v1 as components
 import pandas as pd
 
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
@@ -74,6 +76,7 @@ RUTA_SCRIPT = os.path.abspath(__file__)
 BASE_DIR = os.path.dirname(RUTA_SCRIPT)
 st.session_state["errores_ui"] = []
 st.session_state.setdefault("cap_v", 0)
+st.session_state.setdefault("mem_regs", [])
 
 
 def resolver_ruta(win_path, rel_name):
@@ -106,6 +109,8 @@ BODEGAS_OFICIALES = ["01", "03", "04", "05", "3V", "5V"]
 MAPEO_BOD_COL = {"01": 5, "03": 6, "04": 7, "05": 8, "3V": 9, "5V": 10}
 IDX_TOTAL_NAC = 11
 IDX_COL_V = 21
+IDX_COL_W = 22
+MAX_COSTO_UNIT = 1000000.0
 
 CUSTODIO_BOD = {
     "alexpajaritoruiz@icloud.com": BODEGAS_OFICIALES,
@@ -152,17 +157,10 @@ def registrar_log(detalle, origen="APP", usuario=""):
         return
     if "InsecureRequestWarning" in det_s or "Chart fallback" in det_s:
         return
-
     now_s = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     usr_s = str(usuario or st.session_state.get("usr_act", "sistema")).strip().lower()
     err_texto = f"[{str(origen or 'APP').upper()}] {det_s[:280]}"
-
-    item = {
-        "Timestamp": now_s,
-        "Usuario": usr_s,
-        "Error_UI": err_texto,
-        "Enviado_GS": "NO",
-    }
+    item = {"Timestamp": now_s, "Usuario": usr_s, "Error_UI": err_texto, "Enviado_GS": "NO"}
     logs = cargar_logs()
     logs.append(item)
     guardar_logs_lista(logs)
@@ -229,13 +227,18 @@ def norm_est(v):
     return s or "CUADRADO (OK)"
 
 
-def num_es(v):
+def num_es(v, max_abs=None):
     if v is None:
         return 0.0
     if isinstance(v, (int, float)):
-        return float(v)
+        val = float(v)
+        if not math.isfinite(val):
+            return 0.0
+        if max_abs is not None and abs(val) > max_abs:
+            return 0.0
+        return val
     s = str(v).strip().replace("USD", "").replace("$", "").replace(" ", "")
-    if not s:
+    if not s or s.startswith("#") or s.upper() in ["NAN", "NONE", "NULL", "ERROR", "ERR"]:
         return 0.0
     if "," in s and "." in s:
         if s.rfind(",") > s.rfind("."):
@@ -249,12 +252,23 @@ def num_es(v):
         else:
             s = s.replace(",", ".")
     try:
-        return float(s)
+        val = float(s)
+        if not math.isfinite(val):
+            return 0.0
+        if max_abs is not None and abs(val) > max_abs:
+            return 0.0
+        return val
     except Exception:
         return 0.0
 
 
+def limpiar_costo_unit(v):
+    c = num_es(v, max_abs=MAX_COSTO_UNIT)
+    return round(c, 4) if c > 0 else 0.0
+
+
 def calcular_dif_estado_costo(q_acum, st_teo, q_actual, c_unit):
+    c_u = limpiar_costo_unit(c_unit)
     dif_fisica = round(float(q_acum) - float(st_teo), 4)
     if dif_fisica > 0:
         estado = "SOBRANTE"
@@ -265,9 +279,9 @@ def calcular_dif_estado_costo(q_acum, st_teo, q_actual, c_unit):
     else:
         estado = "CUADRADO (OK)"
         signo_costo = 0.0
-    costo_total = round(float(c_unit) * float(q_actual), 2)
-    costo_dif = round(float(c_unit) * abs(dif_fisica) * signo_costo, 2)
-    return dif_fisica, estado, costo_total, costo_dif
+    costo_total = round(c_u * float(q_actual), 2)
+    costo_dif = round(c_u * abs(dif_fisica) * signo_costo, 2)
+    return dif_fisica, estado, costo_total, costo_dif, c_u
 
 
 def fmt_txt(v):
@@ -276,42 +290,102 @@ def fmt_txt(v):
 
 
 def cargar_json():
+    regs = []
     if os.path.exists(json_path):
         try:
             with open(json_path, "r", encoding="utf-8") as f:
                 d = json.load(f)
-                return d if isinstance(d, list) else []
+                if isinstance(d, list):
+                    regs.extend(d)
         except Exception as e:
             log_err(f"JSON leer: {e}", origen="JSON")
-            return []
-    return []
+    if isinstance(st.session_state.get("mem_regs"), list):
+        vistos = {str(x.get("ID_Tx", "")).strip().upper() for x in regs if isinstance(x, dict) and x.get("ID_Tx")}
+        for r in st.session_state["mem_regs"]:
+            if isinstance(r, dict):
+                tx = str(r.get("ID_Tx", "")).strip().upper()
+                if not tx or tx not in vistos:
+                    regs.append(r)
+                    if tx:
+                        vistos.add(tx)
+    return regs
 
 
 def guardar_json(reg):
-    regs = cargar_json()
-    regs.append(reg)
+    st.session_state.setdefault("mem_regs", [])
+    st.session_state["mem_regs"].append(reg)
     try:
-        os.makedirs(os.path.dirname(json_path), exist_ok=True)
+        carpeta_json = os.path.dirname(json_path)
+        if carpeta_json:
+            os.makedirs(carpeta_json, exist_ok=True)
+        regs_disco = []
+        if os.path.exists(json_path):
+            with open(json_path, "r", encoding="utf-8") as f:
+                d = json.load(f)
+                if isinstance(d, list):
+                    regs_disco = d
+        regs_disco.append(reg)
         with open(json_path, "w", encoding="utf-8") as f:
-            json.dump(regs, f, indent=2, ensure_ascii=False)
-        return True
-    except Exception as e:
-        log_err(f"JSON guardar: {e}", origen="JSON")
-        return False
+            json.dump(regs_disco, f, indent=2, ensure_ascii=False)
+    except Exception:
+        pass
+    return True
+
+
+def consolidar_estado_sku_en_json(periodo_k, bod_k, sku_k, st_teo_k, dif_consol, est_consol):
+    per_s = str(periodo_k or "").strip()
+    bod_s = norm_bod(bod_k)
+    sku_s = str(sku_k or "").strip().upper()
+    if not per_s or not bod_s or not sku_s:
+        return
+
+    def _act_lista(lst):
+        camb = False
+        for r in lst:
+            if (
+                str(r.get("Periodo", "")).strip() == per_s
+                and norm_bod(r.get("Bodega", "")) == bod_s
+                and str(r.get("COD_SKU", "")).strip().upper() == sku_s
+            ):
+                cu = limpiar_costo_unit(r.get("COSTO UNITARIO", 0))
+                signo = 1.0 if est_consol == "SOBRANTE" else (-1.0 if est_consol == "FALTANTE" else 0.0)
+                r["QSA_Teorico"] = float(st_teo_k)
+                r["DIFERENCIA"] = float(dif_consol)
+                r["ESTADO"] = est_consol
+                r["COSTO UNITARIO"] = cu
+                r["COSTO DIF"] = round(cu * abs(float(dif_consol)) * signo, 2)
+                camb = True
+        return camb
+
+    if isinstance(st.session_state.get("mem_regs"), list):
+        _act_lista(st.session_state["mem_regs"])
+    try:
+        if os.path.exists(json_path):
+            with open(json_path, "r", encoding="utf-8") as f:
+                d = json.load(f)
+            if isinstance(d, list) and _act_lista(d):
+                with open(json_path, "w", encoding="utf-8") as f:
+                    json.dump(d, f, indent=2, ensure_ascii=False)
+    except Exception:
+        pass
 
 
 def respaldar_y_limpiar_pruebas():
-    carpeta_respaldo = os.path.join(os.path.dirname(json_path), "Respaldos_Pruebas")
-    os.makedirs(carpeta_respaldo, exist_ok=True)
-    stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    for arch in [json_path, enviados_path]:
-        if os.path.exists(arch):
-            destino = os.path.join(carpeta_respaldo, f"{os.path.splitext(os.path.basename(arch))[0]}_{stamp}.json")
-            shutil.copy2(arch, destino)
-    with open(json_path, "w", encoding="utf-8") as f:
-        json.dump([], f, indent=2, ensure_ascii=False)
-    with open(enviados_path, "w", encoding="utf-8") as f:
-        json.dump([], f, indent=2, ensure_ascii=False)
+    carpeta_respaldo = os.path.join(os.path.dirname(json_path) or BASE_DIR, "Respaldos_Pruebas")
+    try:
+        os.makedirs(carpeta_respaldo, exist_ok=True)
+        stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        for arch in [json_path, enviados_path]:
+            if os.path.exists(arch):
+                destino = os.path.join(carpeta_respaldo, f"{os.path.splitext(os.path.basename(arch))[0]}_{stamp}.json")
+                shutil.copy2(arch, destino)
+        with open(json_path, "w", encoding="utf-8") as f:
+            json.dump([], f, indent=2, ensure_ascii=False)
+        with open(enviados_path, "w", encoding="utf-8") as f:
+            json.dump([], f, indent=2, ensure_ascii=False)
+    except Exception:
+        pass
+    st.session_state["mem_regs"] = []
     leer_gs.clear()
     return carpeta_respaldo
 
@@ -336,7 +410,9 @@ def marcar_enviado(tx_id):
     if t not in s:
         s.add(t)
         try:
-            os.makedirs(os.path.dirname(enviados_path), exist_ok=True)
+            carpeta_env = os.path.dirname(enviados_path)
+            if carpeta_env:
+                os.makedirs(carpeta_env, exist_ok=True)
             with open(enviados_path, "w", encoding="utf-8") as f:
                 json.dump(sorted(list(s)), f, indent=2, ensure_ascii=False)
         except Exception:
@@ -374,15 +450,20 @@ def leer_gs():
 
 
 def armar_payload_gs(reg, tx_id):
+    cu = limpiar_costo_unit(reg.get("COSTO UNITARIO", 0))
+    q_v = num_es(reg.get("Q", 0))
+    dif_v = num_es(reg.get("DIFERENCIA", 0))
+    est_v = norm_est(reg.get("ESTADO", ""))
+    signo = 1.0 if est_v == "SOBRANTE" else (-1.0 if est_v == "FALTANTE" else 0.0)
+    ct_v = round(cu * q_v, 2)
+    cd_v = round(cu * abs(dif_v) * signo, 2)
     return [
         reg.get("Periodo", ""), tx_id, reg.get("Timestamp", ""), reg.get("Correo_Usuario", ""),
         reg.get("Ciudad", ""), fmt_txt(norm_bod(reg.get("Bodega", ""))), reg.get("Ubicacion", ""),
-        fmt_txt(reg.get("COD_SKU", "")), num_es(reg.get("Q", 0)), reg.get("BOD/SKU", ""), reg.get("Motivo", ""),
+        fmt_txt(reg.get("COD_SKU", "")), q_v, reg.get("BOD/SKU", ""), reg.get("Motivo", ""),
         reg.get("LINEA DE INVENTARIO", ""), reg.get("PROVEEDOR", ""), fmt_txt(reg.get("ALTERNO", "")),
-        reg.get("DESCRIPCIÓN", ""), reg.get("UNIDAD", ""), num_es(reg.get("DIFERENCIA", 0)),
-        norm_est(reg.get("ESTADO", "")), num_es(reg.get("COSTO UNITARIO", 0)),
-        num_es(reg.get("COSTO TOTAL", 0)), num_es(reg.get("COSTO DIF", 0)),
-        num_es(reg.get("QSA_Teorico", 0)),
+        reg.get("DESCRIPCIÓN", ""), reg.get("UNIDAD", ""), dif_v, est_v,
+        cu, ct_v, cd_v, num_es(reg.get("QSA_Teorico", 0)),
     ]
 
 
@@ -451,8 +532,11 @@ def prep_df(regs):
     df["COD_SKU"] = df["COD_SKU"].astype(str).str.strip().str.upper()
     df["PROVEEDOR"] = df["PROVEEDOR"].astype(str).str.strip().str.upper()
     df["ESTADO"] = df["ESTADO"].apply(norm_est)
-    for nc in ["Q", "QSA_Teorico", "DIFERENCIA", "COSTO UNITARIO", "COSTO TOTAL", "COSTO DIF"]:
-        df[nc] = df[nc].apply(num_es)
+    for nc in ["Q", "QSA_Teorico", "DIFERENCIA"]:
+        df[nc] = df[nc].apply(lambda x: num_es(x, max_abs=1e12))
+    df["COSTO UNITARIO"] = df["COSTO UNITARIO"].apply(limpiar_costo_unit)
+    df["COSTO TOTAL"] = df["COSTO TOTAL"].apply(lambda x: num_es(x, max_abs=1e11))
+    df["COSTO DIF"] = df["COSTO DIF"].apply(lambda x: num_es(x, max_abs=1e11))
     return df[COLS_REP].copy()
 
 
@@ -467,7 +551,14 @@ def tabla_md(df, cols, n=8):
         vals = []
         for c in cols:
             v = row.get(c, "")
-            s = f"{v:,.2f}" if isinstance(v, float) and "COSTO" in c.upper() else (f"{v:g}" if isinstance(v, float) else str(v or ""))
+            if isinstance(v, float) and "UNITARIO" in c.upper():
+                s = f"{v:,.4f}"
+            elif isinstance(v, float) and "COSTO" in c.upper():
+                s = f"{v:,.2f}"
+            elif isinstance(v, float):
+                s = f"{v:g}"
+            else:
+                s = str(v or "")
             vals.append(s.replace("|", "/").replace("\n", " ").strip())
         lines.append("| " + " | ".join(vals) + " |")
     return "\n".join(lines)
@@ -491,12 +582,17 @@ def sku_habilitado_col_v(row, muestreo=True):
     return True
 
 
+def obtener_costo_nac_col_w(row):
+    if IDX_COL_W < len(row):
+        return limpiar_costo_unit(row[IDX_COL_W])
+    return 0.0
+
+
 def obtener_skus_teoricos_bodega(nac_rows, dict_maestro, bod, muestreo=True):
     skus_set = set()
     desc_map = {}
     if not nac_rows or len(nac_rows) <= 1:
         return [], desc_map
-
     idx_b = resolver_col_bodega(nac_rows, bod)
     for row in nac_rows[1:]:
         if not row or len(row) == 0 or row[0] is None:
@@ -504,19 +600,13 @@ def obtener_skus_teoricos_bodega(nac_rows, dict_maestro, bod, muestreo=True):
         sv = str(row[0]).strip().upper()
         if not sv or sv in ["NONE", "NAN"]:
             continue
-
         if not sku_habilitado_col_v(row, muestreo=muestreo):
             continue
-
-        saldo_bod = num_es(row[idx_b]) if idx_b < len(row) else 0.0
+        saldo_bod = num_es(row[idx_b], max_abs=1e12) if idx_b < len(row) else 0.0
         if saldo_bod > 0:
             skus_set.add(sv)
             if sv not in desc_map:
-                desc_map[sv] = next(
-                    (v for k, v in dict_maestro.get(sv, {}).items() if "DESC" in k),
-                    "",
-                )
-
+                desc_map[sv] = next((v for k, v in dict_maestro.get(sv, {}).items() if "DESC" in k), "")
     return sorted(skus_set), desc_map
 
 
@@ -535,19 +625,10 @@ def construir_metricas_avance(df, nac_rows, muestreo=True):
         pend_skus = max(teo_skus - cont_skus, 0) if teo_skus > 0 else 0
         pct_avance = round((cont_skus / teo_skus) * 100.0, 2) if teo_skus > 0 else 0.0
         filas.append([
-            str(per_k),
-            str(bod_k),
-            str(cus_k),
-            int(len(grp)),
-            int(teo_skus),
-            int(cont_skus),
-            int(pend_skus),
-            float(pct_avance),
-            round(float(grp["Q"].sum()), 2),
-            int((grp["ESTADO"] == "SOBRANTE").sum()),
-            int((grp["ESTADO"] == "FALTANTE").sum()),
-            int((grp["ESTADO"] == "CUADRADO (OK)").sum()),
-            round(float(grp["COSTO TOTAL"].sum()), 2),
+            str(per_k), str(bod_k), str(cus_k), int(len(grp)), int(teo_skus), int(cont_skus),
+            int(pend_skus), float(pct_avance), round(float(grp["Q"].sum()), 2),
+            int((grp["ESTADO"] == "SOBRANTE").sum()), int((grp["ESTADO"] == "FALTANTE").sum()),
+            int((grp["ESTADO"] == "CUADRADO (OK)").sum()), round(float(grp["COSTO TOTAL"].sum()), 2),
             round(float(grp["COSTO DIF"].sum()), 2),
         ])
     return filas
@@ -564,12 +645,8 @@ def construir_resumen_bodega(df, nac_rows, muestreo=True, bodega_filtro="TODAS")
         pct_avance = round((cont_skus / teo_skus) * 100.0, 1) if teo_skus > 0 else 0.0
         if not grp.empty or bodega_filtro != "TODAS":
             filas.append({
-                "Bodega": bod_k,
-                "SKU_Teoricos": teo_skus,
-                "SKU_Contados": cont_skus,
-                "SKU_Pendientes": pend_skus,
-                "Avance_Pct": pct_avance,
-                "Tx": int(len(grp)),
+                "Bodega": bod_k, "SKU_Teoricos": teo_skus, "SKU_Contados": cont_skus,
+                "SKU_Pendientes": pend_skus, "Avance_Pct": pct_avance, "Tx": int(len(grp)),
                 "Cantidad_Q": round(float(grp["Q"].sum()), 2) if not grp.empty else 0.0,
                 "Sobrantes": int((grp["ESTADO"] == "SOBRANTE").sum()) if not grp.empty else 0,
                 "Faltantes": int((grp["ESTADO"] == "FALTANTE").sum()) if not grp.empty else 0,
@@ -586,24 +663,20 @@ def render_lista_visual(df_plot, label_col, val_cols, titulo=""):
     if df_plot is None or df_plot.empty:
         st.info("Sin datos para mostrar con los filtros actuales.")
         return
-
     col_main = val_cols[0]
     max_val = max((abs(float(v)) for v in df_plot[col_main]), default=1.0)
     if max_val <= 0:
         max_val = 1.0
-
-    for idx_r, r in enumerate(df_plot.to_dict(orient="records")):
+    for r in df_plot.to_dict(orient="records"):
         etq = str(r.get(label_col, "")).strip() or "SIN DATO"
         v_main = float(r.get(col_main, 0.0) or 0.0)
         ratio = min(max(abs(v_main) / max_val, 0.0), 1.0)
-
         if "USD" in col_main.upper() or "COSTO" in col_main.upper():
             main_fmt = f"${v_main:,.2f}"
         elif "PCT" in col_main.upper():
             main_fmt = f"{v_main:,.1f}%"
         else:
             main_fmt = f"{v_main:,.0f}" if float(v_main).is_integer() else f"{v_main:,.2f}"
-
         extras = []
         for c_sec in val_cols[1:]:
             v_sec = float(r.get(c_sec, 0.0) or 0.0)
@@ -614,11 +687,10 @@ def render_lista_visual(df_plot, label_col, val_cols, titulo=""):
             else:
                 val_sec_fmt = f"{v_sec:,.0f}" if float(v_sec).is_integer() else f"{v_sec:,.2f}"
             extras.append(f"**{c_sec}:** {val_sec_fmt}")
-
         st.markdown(f"**{etq}** — **{col_main}:** `{main_fmt}`")
         if extras:
             st.caption(" | ".join(extras))
-        st.progress(ratio, key=f"prog_{label_col}_{etq}_{idx_r}")
+        st.progress(ratio)
 
 
 def render_tabla_segura(df_in, cols, max_filas=50, key_suf="tbl"):
@@ -636,7 +708,9 @@ def render_tabla_segura(df_in, cols, max_filas=50, key_suf="tbl"):
         for c in cols:
             val = row.get(c, "")
             if isinstance(val, float):
-                if "COSTO" in c.upper() or "USD" in c.upper():
+                if "UNITARIO" in c.upper():
+                    txt = f"${val:,.4f}"
+                elif "COSTO" in c.upper() or "USD" in c.upper():
                     txt = f"${val:,.2f}"
                 elif "PCT" in c.upper():
                     txt = f"{val:,.1f}%"
@@ -644,17 +718,93 @@ def render_tabla_segura(df_in, cols, max_filas=50, key_suf="tbl"):
                     txt = f"{val:,.0f}" if float(val).is_integer() else f"{val:,.2f}"
             else:
                 txt = str(val or "")
-            tds.append(
-                f'<td style="padding:7px 10px;border:1px solid #CBD5E1;color:#0F172A!important;font-size:13px;white-space:nowrap;">{html.escape(txt)}</td>'
-            )
+            tds.append(f'<td style="padding:7px 10px;border:1px solid #CBD5E1;color:#0F172A!important;font-size:13px;white-space:nowrap;">{html.escape(txt)}</td>')
         trs.append(f'<tr style="background:#FFFFFF;">{"".join(tds)}</tr>')
-
     st.markdown(
         f'<div style="overflow-x:auto;border-radius:8px;border:1px solid #CBD5E1;margin-top:6px;margin-bottom:10px;"><table style="width:100%;border-collapse:collapse;"><thead><tr>{ths}</tr></thead><tbody>{"".join(trs)}</tbody></table></div>',
         unsafe_allow_html=True,
     )
     if len(df_in) > max_filas:
-        st.caption(f"Mostrando las {max_filas} filas más recientes de {len(df_in)} registros filtrados. Descarga el Excel para ver el total completo.")
+        st.caption(f"Mostrando las {max_filas} filas más recientes de {len(df_in)} registros filtrados.")
+
+
+def render_lector_codigos_barras(comp_key):
+    html_code = f"""
+    <div style="font-family:sans-serif;padding:8px;background:#F8FAFC;border:1px solid #CBD5E1;border-radius:8px;">
+      <div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:8px;">
+        <button id="btnStartScan_{comp_key}" type="button" style="padding:8px 12px;background:#0F172A;color:#FFF;border:none;border-radius:6px;font-weight:700;cursor:pointer;">Activar lector de barras</button>
+        <button id="btnStopScan_{comp_key}" type="button" style="padding:8px 12px;background:#475569;color:#FFF;border:none;border-radius:6px;font-weight:700;cursor:pointer;">Detener cámara</button>
+      </div>
+      <video id="vidScan_{comp_key}" playsinline muted style="width:100%;max-height:220px;background:#0F172A;border-radius:6px;display:none;"></video>
+      <div id="resScan_{comp_key}" style="margin-top:6px;font-size:13px;font-weight:700;color:#1E3A8A;">Apunta la cámara trasera al código de barras.</div>
+    </div>
+    <script>
+    (function() {{
+      const btnStart = document.getElementById("btnStartScan_{comp_key}");
+      const btnStop = document.getElementById("btnStopScan_{comp_key}");
+      const video = document.getElementById("vidScan_{comp_key}");
+      const statusEl = document.getElementById("resScan_{comp_key}");
+      let stream = null;
+      let timerId = null;
+      function aplicarCodigo(codigo) {{
+        const limpio = String(codigo || "").trim().toUpperCase();
+        if (!limpio) return;
+        statusEl.textContent = "Código detectado: " + limpio;
+        try {{
+          if (navigator.clipboard && navigator.clipboard.writeText) navigator.clipboard.writeText(limpio).catch(() => {{}});
+          const inputs = window.parent.document.querySelectorAll('input[type="text"]');
+          for (const inp of inputs) {{
+            if ((inp.getAttribute("aria-label") || "").toUpperCase().includes("COD_SKU")) {{
+              const nativeSetter = Object.getOwnPropertyDescriptor(window.parent.HTMLInputElement.prototype, "value").set;
+              nativeSetter.call(inp, limpio);
+              inp.dispatchEvent(new Event("input", {{ bubbles: true }}));
+              inp.dispatchEvent(new Event("change", {{ bubbles: true }}));
+              break;
+            }}
+          }}
+        }} catch(e) {{}}
+        detener();
+      }}
+      function detener() {{
+        if (timerId) {{ clearInterval(timerId); timerId = null; }}
+        if (stream) {{ stream.getTracks().forEach(t => t.stop()); stream = null; }}
+        video.style.display = "none";
+      }}
+      async function iniciar() {{
+        detener();
+        if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {{
+          statusEl.textContent = "Sin acceso directo a cámara. Digita o pega COD_SKU.";
+          return;
+        }}
+        try {{
+          stream = await navigator.mediaDevices.getUserMedia({{ video: {{ facingMode: {{ ideal: "environment" }} }}, audio: false }});
+          video.srcObject = stream;
+          video.style.display = "block";
+          await video.play();
+          statusEl.textContent = "Cámara activa: enfocando código de barras...";
+          if ("BarcodeDetector" in window) {{
+            const detector = new window.BarcodeDetector({{ formats: ["code_128", "code_39", "ean_13", "ean_8", "upc_a", "upc_e", "qr_code", "itf"] }});
+            timerId = setInterval(async () => {{
+              if (video.readyState >= 2) {{
+                try {{
+                  const codes = await detector.detect(video);
+                  if (codes && codes.length > 0 && codes[0].rawValue) aplicarCodigo(codes[0].rawValue);
+                }} catch(e) {{}}
+              }}
+            }}, 350);
+          }} else {{
+            statusEl.textContent = "Cámara abierta. Usa Foto Evidencia o digita COD_SKU.";
+          }}
+        }} catch(err) {{
+          statusEl.textContent = "No se pudo abrir cámara. Digita o pega COD_SKU.";
+        }}
+      }}
+      btnStart.addEventListener("click", iniciar);
+      btnStop.addEventListener("click", detener);
+    }})();
+    </script>
+    """
+    components.html(html_code, height=290)
 
 
 def excel_bytes(df, nac_rows=None, muestreo=True):
@@ -669,15 +819,17 @@ def excel_bytes(df, nac_rows=None, muestreo=True):
         cell.fill = fill
         cell.font = font
         cell.alignment = Alignment(horizontal="center", vertical="center")
-    for r_idx, r_vals in enumerate(df.itertuples(index=False, name=None), start=2):
+    for r_vals in df.itertuples(index=False, name=None):
         ws.append(list(r_vals))
         for c_idx, cname in enumerate(df.columns, start=1):
-            c = ws.cell(row=r_idx, column=c_idx)
+            c = ws.cell(row=ws.max_row, column=c_idx)
             if cname in {"Bodega", "COD_SKU", "ALTERNO", "ID_Tx", "Ubicacion"}:
                 c.number_format = "@"
                 if c.value is not None:
                     c.value = str(c.value)
-            elif cname in {"COSTO UNITARIO", "COSTO TOTAL", "COSTO DIF", "Q", "QSA_Teorico", "DIFERENCIA"}:
+            elif cname == "COSTO UNITARIO":
+                c.number_format = "#,##0.0000"
+            elif cname in {"COSTO TOTAL", "COSTO DIF", "Q", "QSA_Teorico", "DIFERENCIA"}:
                 c.number_format = "#,##0.00"
     for col in ws.columns:
         ml = max((len(str(cell.value or "")) for cell in col), default=10)
@@ -696,9 +848,7 @@ def excel_bytes(df, nac_rows=None, muestreo=True):
         cell.fill = fill
         cell.font = font
         cell.alignment = Alignment(horizontal="center", vertical="center")
-
-    metricas_rows = construir_metricas_avance(df, nac_rows or [], muestreo=muestreo)
-    for r_vals in metricas_rows:
+    for r_vals in construir_metricas_avance(df, nac_rows or [], muestreo=muestreo):
         ws_av.append(r_vals)
     for r_i in range(2, ws_av.max_row + 1):
         ws_av.cell(row=r_i, column=2).number_format = "@"
@@ -737,7 +887,7 @@ def cargar_pivot(p):
                                     for i, val in enumerate(row):
                                         if i < len(cand) and cand[i] and val is not None:
                                             vs = str(val).strip()
-                                            if vs and vs.upper() not in ["NONE", "NAN"]:
+                                            if vs and not vs.startswith("#") and vs.upper() not in ["NONE", "NAN"]:
                                                 dm[sv][cand[i]] = vs
                     break
     except Exception as e:
@@ -765,7 +915,7 @@ f_script = fecha_arch(RUTA_SCRIPT)
 cap_v = st.session_state["cap_v"]
 
 # ==============================================================================
-# PANEL IZQUIERDO: CONTROL OPERATIVO + FILTROS MAESTROS DE ESTADÍSTICAS
+# PANEL IZQUIERDO
 # ==============================================================================
 usuario = st.sidebar.text_input("Correo Usuario / Custodio:", value="alexpajaritoruiz@icloud.com", key="usr_in").strip().lower()
 st.session_state["usr_act"] = usuario
@@ -779,14 +929,16 @@ if "bod_act" not in st.session_state or st.session_state["bod_act"] not in bods_
 
 def limpiar_controles_bodega():
     st.session_state["cap_v"] = st.session_state.get("cap_v", 0) + 1
+    st.session_state.pop("flt_bod", None)
+    st.session_state.pop("flt_ciu", None)
 
 
 bod_norm = norm_bod(st.sidebar.radio("Bodega:", bods_perm, key="bod_act", on_change=limpiar_controles_bodega))
-
 ciudades = ["Quito"] if bod_norm in ["01", "05", "5V"] else (["Guayaquil"] if bod_norm in ["03", "3V"] else (["Cuenca"] if bod_norm == "04" else ["Quito", "Guayaquil", "Cuenca", "Otras"]))
+ciudad_def = ciudades[0].upper()
 
 if "per_abierto" not in st.session_state:
-    st.session_state["per_abierto"] = False
+    st.session_state["per_abierto"] = True
 if es_admin:
     st.session_state["per_abierto"] = st.sidebar.toggle("Periodo abierto (Admin)", value=st.session_state["per_abierto"], key="per_abierto_tgl")
 else:
@@ -817,15 +969,61 @@ incluir_gs_rep = st.sidebar.checkbox("Incluir registros de Google Sheets", value
 origen_label = "JSON local + Google Sheets" if incluir_gs_rep else "Solo JSON local (toma_fisica_registros.json)"
 st.sidebar.caption(f"Origen activo: {origen_label}")
 
+
+def resetear_filtros_estadistica():
+    st.session_state["flt_per"] = "TODOS"
+    st.session_state["flt_bod"] = "TODAS"
+    st.session_state["flt_ciu"] = "TODAS"
+    st.session_state["flt_cus"] = "TODOS"
+    st.session_state["flt_sku"] = "TODOS"
+    st.session_state["flt_prv"] = "TODOS"
+
+
+def sincronizar_filtros_operacion():
+    st.session_state["flt_per"] = periodo_act
+    st.session_state["flt_bod"] = bod_norm
+    st.session_state["flt_ciu"] = ciudad_def
+    st.session_state["flt_cus"] = "TODOS"
+    st.session_state["flt_sku"] = "TODOS"
+    st.session_state["flt_prv"] = "TODOS"
+
+
+f_col1, f_col2 = st.sidebar.columns(2)
+f_col1.button("Periodo/Bod act.", on_click=sincronizar_filtros_operacion, use_container_width=True, key="btn_flt_act")
+f_col2.button("Ver todo", on_click=resetear_filtros_estadistica, use_container_width=True, key="btn_flt_all")
+
 df_base_rep = prep_df(datos_combinados(incluir_gs=incluir_gs_rep))
 muestreo_rep = "Muestreo" in tipo_proc
 
-f_per = st.sidebar.selectbox("Periodo:", ["TODOS"] + sorted([p for p in df_base_rep["Periodo"].unique() if p], reverse=True), key="flt_per") if not df_base_rep.empty else "TODOS"
-f_bod = st.sidebar.selectbox("Bodega:", ["TODAS"] + sorted([b for b in df_base_rep["Bodega"].unique() if b]), key="flt_bod") if not df_base_rep.empty else "TODAS"
-f_ciu = st.sidebar.selectbox("Ciudad:", ["TODAS"] + sorted([c for c in df_base_rep["Ciudad"].unique() if c]), key="flt_ciu") if not df_base_rep.empty else "TODAS"
-f_cus = st.sidebar.selectbox("Custodio:", ["TODOS"] + sorted([c for c in df_base_rep["Correo_Usuario"].unique() if c]), key="flt_cus") if not df_base_rep.empty else "TODOS"
-f_sku = st.sidebar.text_input("COD_SKU:", value="", key="flt_sku").strip().upper()
-f_prv = st.sidebar.text_input("Proveedor:", value="", key="flt_prv").strip().upper()
+periodos_disp = ["TODOS"] + sorted(set([periodo_act] + [p for p in df_base_rep["Periodo"].unique() if p]), reverse=True)
+if "flt_per" not in st.session_state or st.session_state["flt_per"] not in periodos_disp:
+    st.session_state["flt_per"] = periodo_act if periodo_act in periodos_disp else "TODOS"
+f_per = st.sidebar.selectbox("Periodo:", periodos_disp, key="flt_per")
+
+bodegas_disp = ["TODAS"] + sorted(set(BODEGAS_OFICIALES + [b for b in df_base_rep["Bodega"].unique() if b]))
+if "flt_bod" not in st.session_state or st.session_state["flt_bod"] not in bodegas_disp:
+    st.session_state["flt_bod"] = bod_norm if bod_norm in bodegas_disp else "TODAS"
+f_bod = st.sidebar.selectbox("Bodega:", bodegas_disp, key="flt_bod")
+
+ciudades_disp = ["TODAS"] + sorted(set(["QUITO", "GUAYAQUIL", "CUENCA", ciudad_def] + [c for c in df_base_rep["Ciudad"].unique() if c]))
+if "flt_ciu" not in st.session_state or st.session_state["flt_ciu"] not in ciudades_disp:
+    st.session_state["flt_ciu"] = ciudad_def if ciudad_def in ciudades_disp else "TODAS"
+f_ciu = st.sidebar.selectbox("Ciudad:", ciudades_disp, key="flt_ciu")
+
+custodios_disp = ["TODOS"] + sorted([c for c in df_base_rep["Correo_Usuario"].unique() if c]) if not df_base_rep.empty else ["TODOS"]
+if "flt_cus" not in st.session_state or st.session_state["flt_cus"] not in custodios_disp:
+    st.session_state["flt_cus"] = "TODOS"
+f_cus = st.sidebar.selectbox("Custodio:", custodios_disp, key="flt_cus")
+
+skus_disp = ["TODOS"] + sorted([s for s in df_base_rep["COD_SKU"].unique() if s]) if not df_base_rep.empty else ["TODOS"]
+if "flt_sku" not in st.session_state or st.session_state["flt_sku"] not in skus_disp:
+    st.session_state["flt_sku"] = "TODOS"
+f_sku = st.sidebar.selectbox("COD_SKU:", skus_disp, key="flt_sku")
+
+provs_disp = ["TODOS"] + sorted([p for p in df_base_rep["PROVEEDOR"].unique() if p]) if not df_base_rep.empty else ["TODOS"]
+if "flt_prv" not in st.session_state or st.session_state["flt_prv"] not in provs_disp:
+    st.session_state["flt_prv"] = "TODOS"
+f_prv = st.sidebar.selectbox("Proveedor:", provs_disp, key="flt_prv")
 
 if st.sidebar.button("Refrescar estadísticas", use_container_width=True, key="btn_ref_stats_bottom"):
     leer_gs.clear()
@@ -836,16 +1034,20 @@ df_rep = df_base_rep.copy()
 if not df_rep.empty:
     if f_per != "TODOS":
         df_rep = df_rep[df_rep["Periodo"] == str(f_per).strip()]
+    else:
+        ts_dt = pd.to_datetime(df_rep["Timestamp"], errors="coerce")
+        mask_f = ts_dt.isna() | ((ts_dt.dt.date >= f_ini) & (ts_dt.dt.date <= f_fin))
+        df_rep = df_rep[mask_f]
     if f_bod != "TODAS":
         df_rep = df_rep[df_rep["Bodega"] == norm_bod(f_bod)]
     if f_ciu != "TODAS":
         df_rep = df_rep[df_rep["Ciudad"] == str(f_ciu).strip().upper()]
     if f_cus != "TODOS":
         df_rep = df_rep[df_rep["Correo_Usuario"] == str(f_cus).strip().lower()]
-    if f_sku:
-        df_rep = df_rep[df_rep["COD_SKU"].str.contains(f_sku, na=False, regex=False)]
-    if f_prv:
-        df_rep = df_rep[df_rep["PROVEEDOR"].str.contains(f_prv, na=False, regex=False)]
+    if f_sku != "TODOS":
+        df_rep = df_rep[df_rep["COD_SKU"] == str(f_sku).strip().upper()]
+    if f_prv != "TODOS":
+        df_rep = df_rep[df_rep["PROVEEDOR"] == str(f_prv).strip().upper()]
 
 if es_admin:
     st.sidebar.markdown("---")
@@ -899,7 +1101,7 @@ if es_admin:
         if st.button("Limpiar registros de prueba", use_container_width=True, disabled=not confirmar_limpieza, key="btn_limp_pruebas"):
             carp = respaldar_y_limpiar_pruebas()
             st.session_state["cap_v"] += 1
-            st.success(f"Respaldo creado en: {carp}. Registros locales limpiados.")
+            st.success(f"Respaldo creado en: {carp}.")
             st.rerun()
 
 pend_logs_cnt = sum(1 for lg in logs_json if str(lg.get("Enviado_GS", "NO")).upper() != "SI")
@@ -913,7 +1115,7 @@ st.sidebar.markdown(
 )
 
 # ==============================================================================
-# CABECERA + AVISO DISCRETO DE LOGS
+# CABECERA + PESTAÑAS
 # ==============================================================================
 st.markdown('<div class="main-title">Toma Física & Muestreo V7 gPro</div>', unsafe_allow_html=True)
 st.caption(f"Script: `{RUTA_SCRIPT}` | Modificado: `{f_script}` | {PESTANA_LOGS_GS} locales: `{len(logs_json)}`")
@@ -921,9 +1123,6 @@ st.caption(f"Script: `{RUTA_SCRIPT}` | Modificado: `{f_script}` | {PESTANA_LOGS_
 if st.session_state["errores_ui"]:
     st.warning("Incidencias registradas en esta sesión: " + " || ".join(st.session_state["errores_ui"][-2:]))
 
-# ==============================================================================
-# PESTAÑAS PRINCIPALES: OPERACIÓN | DASHBOARD VISUAL | EXPORTACIÓN & LOGS_UI
-# ==============================================================================
 tab_op, tab_dash, tab_exp = st.tabs([
     "Operación y Captura de Campo",
     "Dashboard Estadístico & Avance Visual",
@@ -934,8 +1133,8 @@ with tab_op:
     st.markdown('<div class="card-box">', unsafe_allow_html=True)
     if not st.session_state["per_abierto"]:
         st.warning("Periodo CERRADO: el superusuario debe abrir el periodo para registrar.")
-    if not os.path.exists(nac_path):
-        st.warning("Sin `NAC.xlsx` en este host: los SKUs teóricos en >0 quedan en 0; puedes digitar o escanear `COD_SKU` y registrar.")
+    if (not os.path.exists(nac_path)) and (not os.path.exists(pivot_path)):
+        st.info("Sin `NAC.xlsx` ni `PIVOT` locales: puedes digitar o escanear `COD_SKU` y registrar directo.")
 
     c1, c2, c3 = st.columns(3)
     ciudad = c1.selectbox("Ciudad:", ciudades, key="ciu_in")
@@ -944,10 +1143,11 @@ with tab_op:
 
     idx_b = resolver_col_bodega(nac_rows, bod_norm)
     muestreo = "Muestreo" in tipo_proc
-    ya_aud = set()
-    for r in regs_json:
-        if str(r.get("Periodo", "")).strip() == periodo_act and norm_bod(r.get("Bodega", "")) == bod_norm:
-            ya_aud.add(str(r.get("COD_SKU", "")).strip().upper())
+    ya_aud = {
+        str(r.get("COD_SKU", "")).strip().upper()
+        for r in regs_json
+        if str(r.get("Periodo", "")).strip() == periodo_act and norm_bod(r.get("Bodega", "")) == bod_norm
+    }
 
     skus_unicos, desc_map = obtener_skus_teoricos_bodega(nac_rows, dict_maestro, bod_norm, muestreo=muestreo)
     tot_teo_bod = len(skus_unicos)
@@ -961,24 +1161,43 @@ with tab_op:
     sel_combo = st.selectbox("Catálogo Teórico:", opts, key=f"cb_{bod_norm}_{cap_v}")
     pre_sku = sel_combo.split(" | ")[0].strip().upper() if sel_combo != "-- SELECCIONE O ESCANEE SKU --" else ""
 
-    with st.expander("Cámara / Evidencia (Custodios)"):
-        foto_cap = st.camera_input("Capturar etiqueta / ubicación:", key=f"cam_{bod_norm}_{cap_v}")
-        if foto_cap is not None:
-            st.caption("Foto capturada en sesión.")
+    with st.expander("Cámara: Lector de Código de Barras (Principal) & Foto Evidencia (Secundaria)"):
+        t_scan, t_foto = st.tabs(["1. Lector Código de Barras", "2. Foto Evidencia"])
+        with t_scan:
+            render_lector_codigos_barras(f"{bod_norm}_{cap_v}")
+        with t_foto:
+            foto_cap = st.camera_input("Tomar fotografía de evidencia (etiqueta / ubicación):", key=f"cam_{bod_norm}_{cap_v}")
+            if foto_cap is not None:
+                st.caption("Foto de evidencia guardada en la sesión actual.")
 
     c4, c5, c6 = st.columns([2.5, 1.5, 1])
     cod_sku = c4.text_input("COD_SKU:", value=pre_sku, key=f"sku_{bod_norm}_{cap_v}").strip().upper()
-    cant = c5.number_input("Cantidad (Q):", step=1, value=0, key=f"q_{bod_norm}_{cap_v}")
+    cant = c5.number_input("Cantidad (Q):", step=1, value=1, key=f"q_{bod_norm}_{cap_v}")
     motivo = st.text_input("Motivo Reverso (Col K obligatorio si Q < 0):", key=f"mot_{bod_norm}_{cap_v}").strip().upper() if cant < 0 else ""
 
     c6.write("")
     c6.write("")
     ok_rev = (cant >= 0) or bool(motivo)
-    puede = st.session_state["per_abierto"] and bool(ubic) and ubic not in ["UBICACIÓN", "ESPECIFIQUE"] and bool(cod_sku) and (cant != 0) and ok_rev
+    ubic_valida = bool(ubic) and ubic not in ["UBICACIÓN", "ESPECIFIQUE"]
+    puede = st.session_state["per_abierto"] and ubic_valida and bool(cod_sku) and (cant != 0) and ok_rev
     btn_reg = c6.button("REGISTRAR", use_container_width=True, disabled=not puede, key="btn_reg_tx")
+
+    faltan = []
+    if not st.session_state["per_abierto"]:
+        faltan.append("Periodo abierto")
+    if not ubic_valida:
+        faltan.append("Ubicación")
+    if not cod_sku:
+        faltan.append("COD_SKU")
+    if cant == 0:
+        faltan.append("Cantidad (Q) distinta de 0")
+    if not ok_rev:
+        faltan.append("Motivo Reverso")
+    if faltan:
+        st.caption("Falta para habilitar REGISTRAR: " + ", ".join(faltan) + ".")
     st.markdown("</div>", unsafe_allow_html=True)
 
-    st_teo, st_nac = 0.0, 0.0
+    st_teo, st_nac, c_unit_vista = 0.0, 0.0, 0.0
     if cod_sku:
         art = dict_maestro.get(cod_sku, {})
 
@@ -996,20 +1215,27 @@ with tab_op:
         if len(nac_rows) > 1:
             for row in nac_rows[1:]:
                 if row and row[0] and str(row[0]).strip().upper() == cod_sku:
-                    st_nac = num_es(row[IDX_TOTAL_NAC]) if IDX_TOTAL_NAC < len(row) else 0.0
-                    if sku_habilitado_col_v(row, muestreo=muestreo):
-                        st_teo = num_es(row[idx_b]) if idx_b < len(row) else 0.0
-                    else:
-                        st_teo = 0.0
+                    st_nac = num_es(row[IDX_TOTAL_NAC], max_abs=1e12) if IDX_TOTAL_NAC < len(row) else 0.0
+                    st_teo = num_es(row[idx_b], max_abs=1e12) if (idx_b < len(row) and sku_habilitado_col_v(row, muestreo=muestreo)) else 0.0
+                    c_unit_vista = obtener_costo_nac_col_w(row)
                     break
+        if c_unit_vista <= 0:
+            c_unit_vista = next(
+                (limpiar_costo_unit(v) for k, v in art.items() if any(t in k.upper() for t in ["COSTO", "PRECIO", "VAL_UNIT", "V_UNIT", "P_UNIT"]) and limpiar_costo_unit(v) > 0),
+                0.0,
+            )
+
         prev = sum(
-            num_es(r.get("Q", 0))
+            num_es(r.get("Q", 0), max_abs=1e12)
             for r in regs_json
             if str(r.get("Periodo", "")).strip() == periodo_act and norm_bod(r.get("Bodega", "")) == bod_norm and str(r.get("COD_SKU", "")).strip().upper() == cod_sku
         )
         q_acum_calc = round(float(prev) + float(cant), 4)
+        dif_proy = round(q_acum_calc - float(st_teo), 4)
         st.info(
-            f"**SKU:** {cod_sku} | **Desc:** {flex('DESCRIPCIÓN', 'DESCRIPCION', 'DESC')} | **Und:** {flex('UNIDAD', 'UND')} | **Prov:** {flex('PROVEEDOR', 'SUP', 'FABRICANTE')} | **Acumulado Q:** {q_acum_calc:g}"
+            f"**SKU:** {cod_sku} | **Desc:** {flex('DESCRIPCIÓN', 'DESCRIPCION', 'DESC')} | **Und:** {flex('UNIDAD', 'UND')} | "
+            f"**Prov:** {flex('PROVEEDOR', 'SUP', 'FABRICANTE')} | **Costo Unit (W):** ${c_unit_vista:,.4f} | "
+            f"**Previo Bod:** {prev:g} | **Acumulado Q:** {q_acum_calc:g} | **Dif. Acum:** {dif_proy:g}"
         )
         m1, m2 = st.columns(2)
         m1.markdown(f'<div class="saldo-box"><span class="saldo-lbl">QSA_Teorico ({bod_norm})</span><span class="saldo-val">{st_teo:g}</span></div>', unsafe_allow_html=True)
@@ -1029,16 +1255,26 @@ with tab_op:
                         return str(v).strip()
             return ""
 
-        c_unit = next(
-            (num_es(v) for k, v in art.items() if any(t in k.upper() for t in ["COSTO", "PRECIO", "VAL_UNIT", "V_UNIT", "P_UNIT"]) and num_es(v) > 0),
-            0.0,
-        )
+        st_teo_r, c_unit_r = 0.0, 0.0
+        if len(nac_rows) > 1:
+            for row in nac_rows[1:]:
+                if row and row[0] and str(row[0]).strip().upper() == cod_sku:
+                    st_teo_r = num_es(row[idx_b], max_abs=1e12) if (idx_b < len(row) and sku_habilitado_col_v(row, muestreo=muestreo)) else 0.0
+                    c_unit_r = obtener_costo_nac_col_w(row)
+                    break
+        if c_unit_r <= 0:
+            c_unit_r = next(
+                (limpiar_costo_unit(v) for k, v in art.items() if any(t in k.upper() for t in ["COSTO", "PRECIO", "VAL_UNIT", "V_UNIT", "P_UNIT"]) and limpiar_costo_unit(v) > 0),
+                0.0,
+            )
+
         prev = sum(
-            num_es(r.get("Q", 0))
+            num_es(r.get("Q", 0), max_abs=1e12)
             for r in regs_json
             if str(r.get("Periodo", "")).strip() == periodo_act and norm_bod(r.get("Bodega", "")) == bod_norm and str(r.get("COD_SKU", "")).strip().upper() == cod_sku
         )
-        dif_f, est_f, costo_total, costo_dif = calcular_dif_estado_costo(prev + float(cant), st_teo, cant, c_unit)
+        q_acum_final = round(float(prev) + float(cant), 4)
+        dif_f, est_f, costo_total, costo_dif, c_unit_limpio = calcular_dif_estado_costo(q_acum_final, st_teo_r, cant, c_unit_r)
         now = datetime.now()
         nuevo = {
             "Periodo": periodo_act,
@@ -1059,27 +1295,28 @@ with tab_op:
             "UNIDAD": flex_r("UNIDAD", "UND"),
             "DIFERENCIA": float(dif_f),
             "ESTADO": est_f,
-            "COSTO UNITARIO": float(c_unit),
+            "COSTO UNITARIO": float(c_unit_limpio),
             "COSTO TOTAL": float(costo_total),
             "COSTO DIF": float(costo_dif),
-            "QSA_Teorico": float(st_teo),
+            "QSA_Teorico": float(st_teo_r),
         }
         if guardar_json(nuevo):
+            consolidar_estado_sku_en_json(periodo_act, bod_norm, cod_sku, st_teo_r, dif_f, est_f)
             ok_g, est_g, tx_g = enviar_gs(nuevo)
             st.session_state["cap_v"] += 1
-            st.success(f"Guardado {cod_sku} ({cant:g}) -> {est_f} | GS: {est_g} ({tx_g})" if ok_g else f"Guardado local OK | GS: {est_g}")
+            st.success(f"Guardado {cod_sku} ({cant:g} | Acum {q_acum_final:g}) -> {est_f} (Dif {dif_f:g} | Costo U ${c_unit_limpio:,.4f}) | GS: {est_g} ({tx_g})" if ok_g else f"Guardado local OK | GS: {est_g}")
             st.rerun()
 
     st.markdown("---")
     st.markdown("### Últimos Registros")
     prev_df = prep_df(datos_combinados(incluir_gs=False))
-    st.markdown(tabla_md(prev_df.iloc[::-1], ["Timestamp", "Bodega", "Ubicacion", "COD_SKU", "Q", "QSA_Teorico", "DIFERENCIA", "ESTADO", "COSTO DIF"], 6))
+    st.markdown(tabla_md(prev_df.iloc[::-1], ["Timestamp", "Bodega", "Ubicacion", "COD_SKU", "Q", "QSA_Teorico", "DIFERENCIA", "ESTADO", "COSTO UNITARIO", "COSTO DIF"], 6))
 
 with tab_dash:
     st.markdown("### Panorama General de Toma Física & Avance Nacional")
     st.caption(
         f"**Origen:** `{origen_label}` | **Filas base:** `{len(df_base_rep)}` -> **Filtradas:** `{len(df_rep)}` | "
-        f"**Filtros:** Periodo `{f_per}` | Bodega `{f_bod}` | Ciudad `{f_ciu}` | Custodio `{f_cus}` | SKU `{f_sku or 'TODOS'}` | Prov `{f_prv or 'TODOS'}`"
+        f"**Filtros:** Periodo `{f_per}` | Bodega `{f_bod}` | Ciudad `{f_ciu}` | Custodio `{f_cus}` | SKU `{f_sku}` | Prov `{f_prv}`"
     )
 
     if df_rep.empty:
@@ -1096,61 +1333,23 @@ with tab_dash:
         k4.metric("Valor Contado (USD)", f"${df_rep['COSTO TOTAL'].sum():,.2f}")
         k5.metric("Impacto Dif. (USD)", f"${df_rep['COSTO DIF'].sum():,.2f}")
 
-        st.markdown(
-            f"**Estados en filtro:** &nbsp; **SOBRANTE:** `{sob_cnt}` &nbsp;|&nbsp; **FALTANTE:** `{fal_cnt}` &nbsp;|&nbsp; **CUADRADO (OK):** `{ok_cnt}`"
-        )
-
+        st.markdown(f"**Estados en filtro:** &nbsp; **SOBRANTE:** `{sob_cnt}` &nbsp;|&nbsp; **FALTANTE:** `{fal_cnt}` &nbsp;|&nbsp; **CUADRADO (OK):** `{ok_cnt}`")
         st.divider()
         g1, g2 = st.columns(2)
         with g1:
             df_bod_av = construir_resumen_bodega(df_rep, nac_rows, muestreo=muestreo_rep, bodega_filtro=f_bod)
-            render_lista_visual(
-                df_bod_av,
-                "Bodega",
-                ["SKU_Contados", "SKU_Pendientes", "SKU_Teoricos", "Avance_Pct"],
-                "Avance de SKUs por Bodega (Contados vs Pendientes)",
-            )
-
+            render_lista_visual(df_bod_av, "Bodega", ["SKU_Contados", "SKU_Pendientes", "SKU_Teoricos", "Avance_Pct"], "Avance de SKUs por Bodega (Contados vs Pendientes)")
         with g2:
-            df_cus_g = (
-                df_rep.groupby("Correo_Usuario", as_index=False)
-                .agg(Transacciones=("ID_Tx", "count"), Unidades_Q=("Q", "sum"), Costo_Dif_USD=("COSTO DIF", "sum"))
-                .sort_values("Transacciones", ascending=False)
-            )
-            render_lista_visual(
-                df_cus_g,
-                "Correo_Usuario",
-                ["Transacciones", "Unidades_Q", "Costo_Dif_USD"],
-                "Actividad por Custodio (Tx y Unidades Q)",
-            )
-
+            df_cus_g = df_rep.groupby("Correo_Usuario", as_index=False).agg(Transacciones=("ID_Tx", "count"), Unidades_Q=("Q", "sum"), Costo_Dif_USD=("COSTO DIF", "sum")).sort_values("Transacciones", ascending=False)
+            render_lista_visual(df_cus_g, "Correo_Usuario", ["Transacciones", "Unidades_Q", "Costo_Dif_USD"], "Actividad por Custodio (Tx y Unidades Q)")
         st.divider()
         g3, g4 = st.columns(2)
         with g3:
-            df_ciu_g = (
-                df_rep.groupby("Ciudad", as_index=False)
-                .agg(Transacciones=("ID_Tx", "count"), Unidades_Q=("Q", "sum"), Costo_Dif_USD=("COSTO DIF", "sum"))
-                .sort_values("Unidades_Q", ascending=False)
-            )
-            render_lista_visual(
-                df_ciu_g,
-                "Ciudad",
-                ["Transacciones", "Unidades_Q", "Costo_Dif_USD"],
-                "Distribución por Ciudad (Tx y Unidades Q)",
-            )
-
+            df_ciu_g = df_rep.groupby("Ciudad", as_index=False).agg(Transacciones=("ID_Tx", "count"), Unidades_Q=("Q", "sum"), Costo_Dif_USD=("COSTO DIF", "sum")).sort_values("Unidades_Q", ascending=False)
+            render_lista_visual(df_ciu_g, "Ciudad", ["Transacciones", "Unidades_Q", "Costo_Dif_USD"], "Distribución por Ciudad (Tx y Unidades Q)")
         with g4:
-            df_est_g = (
-                df_rep.groupby("ESTADO", as_index=False)
-                .agg(Registros=("ID_Tx", "count"), Unidades_Q=("Q", "sum"), Costo_Dif_USD=("COSTO DIF", "sum"))
-            )
-            render_lista_visual(
-                df_est_g,
-                "ESTADO",
-                ["Registros", "Unidades_Q", "Costo_Dif_USD"],
-                "Desglose por Estado (Registros y Costo Dif USD)",
-            )
-
+            df_est_g = df_rep.groupby("ESTADO", as_index=False).agg(Registros=("ID_Tx", "count"), Unidades_Q=("Q", "sum"), Costo_Dif_USD=("COSTO DIF", "sum"))
+            render_lista_visual(df_est_g, "ESTADO", ["Registros", "Unidades_Q", "Costo_Dif_USD"], "Desglose por Estado (Registros y Costo Dif USD)")
         st.divider()
         st.markdown("#### Matriz de Avance por Bodega")
         if not df_bod_av.empty:
@@ -1160,11 +1359,16 @@ with tab_dash:
                 max_filas=20,
                 key_suf="matriz_bod",
             )
+        st.markdown("#### Detalle Filtrado (SKU, Proveedor, Cantidades y Diferencia)")
+        render_tabla_segura(
+            df_rep.iloc[::-1],
+            ["Timestamp", "Correo_Usuario", "Ciudad", "Bodega", "PROVEEDOR", "COD_SKU", "Q", "QSA_Teorico", "DIFERENCIA", "ESTADO", "COSTO UNITARIO", "COSTO DIF"],
+            max_filas=30,
+            key_suf="dash_det_filt",
+        )
 
 with tab_exp:
     st.markdown("### Detalle Filtrado & Exportación a Excel")
-    st.caption("Descarga el detalle transaccional (22 columnas con QSA_Teorico) y la hoja de avance consolidado.")
-
     if df_rep.empty:
         st.info("No hay registros disponibles con los filtros actuales.")
     else:
@@ -1180,11 +1384,8 @@ with tab_exp:
 
     st.markdown("---")
     st.markdown(f"### Reporte de LOGS (`{PESTANA_LOGS_GS}` -> Columnas `A:C`)")
-    st.caption("Registra incidencias reales con hora (`Timestamp`), `Usuario` y `Error_UI` para enviarlas a la pestaña `Logs_UI` del libro de Toma Física.")
-
     logs_act = cargar_logs()
     pend_logs = [lg for lg in logs_act if str(lg.get("Enviado_GS", "NO")).upper() != "SI"]
-
     lcol1, lcol2, lcol3 = st.columns([1.6, 1.4, 2])
     if lcol1.button(f"Enviar a {PESTANA_LOGS_GS} ({len(pend_logs)})", use_container_width=True, key="btn_send_logs"):
         if pend_logs:
@@ -1194,7 +1395,6 @@ with tab_exp:
             st.rerun()
         else:
             st.info(f"No hay logs pendientes por enviar a {PESTANA_LOGS_GS}.")
-
     if lcol2.button("Limpiar LOGS locales", use_container_width=True, key="btn_clear_logs"):
         if logs_act:
             guardar_logs_lista([])
@@ -1202,9 +1402,7 @@ with tab_exp:
             st.rerun()
         else:
             st.info("No hay logs locales para limpiar.")
-
     lcol3.caption(f"Pestaña destino: `{PESTANA_LOGS_GS}` (`A:C`) | Total: `{len(logs_act)}` | Pendientes: `{len(pend_logs)}`")
-
     if logs_act:
         df_logs = pd.DataFrame(logs_act).iloc[::-1]
         for c_l in COLS_LOG_UI:
