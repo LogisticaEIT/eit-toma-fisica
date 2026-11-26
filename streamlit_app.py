@@ -84,10 +84,14 @@ st.markdown(
     .saldo-lbl { font-size: 13px !important; font-weight: 700 !important; color: #1E3A8A !important; display: block; margin-bottom: 4px; }
     .saldo-val { font-size: 22px !important; font-weight: 900 !important; color: #0F172A !important; display: block; }
     .chart-card {
-        background: #FFFFFF; border: 1px solid #CBD5E1; border-radius: 10px; padding: 12px; margin-bottom: 10px;
+        background: #FFFFFF; border: 1px solid #CBD5E1; border-radius: 10px; padding: 14px; margin-bottom: 14px;
     }
     .chart-title {
-        font-size: 14px !important; font-weight: 800 !important; color: #0F172A !important; margin-bottom: 6px;
+        font-size: 17px !important; font-weight: 800 !important; color: #0F172A !important; margin-bottom: 8px;
+    }
+    .guia-sku-box {
+        background: #F1F5F9; border: 1px solid #CBD5E1; border-radius: 8px; padding: 8px 12px;
+        margin-top: 6px; margin-bottom: 8px; font-size: 13px; color: #0F172A;
     }
     table.tf-table { width: 100%; border-collapse: collapse; background: #FFFFFF; }
     table.tf-table thead th {
@@ -236,7 +240,7 @@ _CODE128_PATTERNS = [
 ]
 
 
-def generar_svg_code128(texto, alto_px=36):
+def generar_svg_code128(texto, alto_px=34):
     txt = "".join(ch for ch in norm_mayus_limpio(texto) if 32 <= ord(ch) <= 126)
     if not txt:
         txt = "000000"
@@ -302,16 +306,20 @@ def render_hoja_a4_etiquetas(cola, cod_label="LBL-EIT-A4", ancho_mm=58, alto_mm=
         for it in sub:
             s_sku = norm_mayus_limpio(it.get("COD_SKU", ""))
             s_desc = html.escape(norm_mayus_limpio(it.get("DESCRIPCION", ""))[:38])
-            svg_bar = generar_svg_code128(s_sku, alto_px=36)
+            s_bod = html.escape(norm_bod(it.get("BODEGA", "")))
+            svg_bar = generar_svg_code128(s_sku, alto_px=34)
             celdas.append(
-                f'<div class="notranslate" translate="no" style="width:{ancho_mm}mm;height:{alto_mm}mm;border:1px dashed #64748B;box-sizing:border-box;'
-                f'padding:1.2mm 2mm;display:flex;flex-direction:column;justify-content:center;align-items:center;'
-                f'text-align:center;background:#FFFFFF;overflow:hidden;gap:0.8mm;">'
+                f'<div class="notranslate" translate="no" style="position:relative;width:{ancho_mm}mm;height:{alto_mm}mm;'
+                f'border:1px dashed #64748B;box-sizing:border-box;padding:1.2mm 2mm;display:flex;flex-direction:column;'
+                f'justify-content:center;align-items:center;text-align:center;background:#FFFFFF;overflow:hidden;gap:0.6mm;">'
                 f'<div style="width:100%;font-size:6.2pt;font-weight:700;color:#0F172A;line-height:1.05;'
                 f'white-space:nowrap;overflow:hidden;text-overflow:ellipsis;text-align:center;">{s_desc}</div>'
                 f'<div style="width:100%;display:flex;justify-content:center;align-items:center;">{svg_bar}</div>'
-                f'<div style="width:100%;font-size:9.2pt;font-weight:900;letter-spacing:0.8px;color:#000000;'
-                f'line-height:1.05;text-align:center;font-family:Arial,Helvetica,sans-serif;">{html.escape(s_sku)}</div>'
+                f'<div style="position:relative;width:100%;display:flex;justify-content:center;align-items:center;">'
+                f'<span style="position:absolute;left:0;bottom:0;font-size:8.2pt;font-weight:900;color:#000000;line-height:1.0;">{s_bod}</span>'
+                f'<span style="font-size:9.2pt;font-weight:900;letter-spacing:0.8px;color:#000000;'
+                f'line-height:1.05;text-align:center;font-family:Arial,Helvetica,sans-serif;">{html.escape(s_sku)}</span>'
+                f'</div>'
                 f'</div>'
             )
         bloques_html.append(
@@ -328,7 +336,7 @@ def render_hoja_a4_etiquetas(cola, cod_label="LBL-EIT-A4", ancho_mm=58, alto_mm=
         <button onclick="window.print()" type="button" style="padding:8px 14px;background:#0F172A;color:#FFFFFF;border:none;border-radius:6px;font-weight:700;cursor:pointer;">
           Imprimir Hoja A4 ({len(cola)} etiquetas / {total_hojas} hoja(s))
         </button>
-        <span style="font-size:12px;color:#334155;font-weight:700;">A4 • {ancho_mm}×{alto_mm} mm • DESCRIPCIÓN / CODE128 / COD_SKU centrado</span>
+        <span style="font-size:12px;color:#334155;font-weight:700;">A4 • {ancho_mm}×{alto_mm} mm • DESCRIPCIÓN / CODE128 / COD_SKU centrado • Bodega en negrita</span>
       </div>
       <style>
         @media print {{
@@ -945,19 +953,6 @@ def _formatear_celda_texto(val, col_name=""):
     return str(val or "")
 
 
-def tabla_md(df, cols, n=8):
-    if df is None or df.empty:
-        return "_Sin registros._"
-    sub = df[cols].head(n)
-    cab = "| " + " | ".join(cols) + " |"
-    sep = "| " + " | ".join(["---"] * len(cols)) + " |"
-    lines = [cab, sep]
-    for row in sub.to_dict(orient="records"):
-        vals = [_formatear_celda_texto(row.get(c, ""), c).replace("|", "/").replace("\n", " ").strip() for c in cols]
-        lines.append("| " + " | ".join(vals) + " |")
-    return "\n".join(lines)
-
-
 def resolver_col_bodega(nac_rows, bod):
     bod_n = norm_bod(bod)
     if nac_rows and len(nac_rows) > 0:
@@ -1077,34 +1072,34 @@ def render_svg_barras_comparativas(df_plot, label_col, serie_a, serie_b, titulo,
         + [abs(float(r.get(serie_b, 0) or 0)) for r in filas]
         + [1.0]
     )
-    row_h = 42
-    top_pad = 28
-    left_w = 135
-    bar_max_w = 390
-    svg_w = left_w + bar_max_w + 150
-    svg_h = top_pad + len(filas) * row_h + 10
+    row_h = 56
+    top_pad = 36
+    left_w = 180
+    bar_max_w = 540
+    svg_w = left_w + bar_max_w + 220
+    svg_h = top_pad + len(filas) * row_h + 14
 
     elems = [
-        f'<rect x="10" y="6" width="12" height="12" rx="2" fill="{color_a}"/>',
-        f'<text x="27" y="16" font-size="11" font-weight="700" fill="#0F172A">{html.escape(leyenda_a)}</text>',
-        f'<rect x="200" y="6" width="12" height="12" rx="2" fill="{color_b}"/>',
-        f'<text x="217" y="16" font-size="11" font-weight="700" fill="#0F172A">{html.escape(leyenda_b)}</text>',
+        f'<rect x="12" y="8" width="16" height="16" rx="3" fill="{color_a}"/>',
+        f'<text x="34" y="21" font-size="15" font-weight="800" fill="#0F172A">{html.escape(leyenda_a)}</text>',
+        f'<rect x="270" y="8" width="16" height="16" rx="3" fill="{color_b}"/>',
+        f'<text x="292" y="21" font-size="15" font-weight="800" fill="#0F172A">{html.escape(leyenda_b)}</text>',
     ]
     for i, r in enumerate(filas):
         y = top_pad + i * row_h
-        lbl = html.escape(str(r.get(label_col, ""))[:18])
+        lbl = html.escape(str(r.get(label_col, ""))[:22])
         va = float(r.get(serie_a, 0) or 0)
         vb = float(r.get(serie_b, 0) or 0)
-        wa = max(2, int((abs(va) / max_v) * bar_max_w)) if va != 0 else 0
-        wb = max(2, int((abs(vb) / max_v) * bar_max_w)) if vb != 0 else 0
+        wa = max(3, int((abs(va) / max_v) * bar_max_w)) if va != 0 else 0
+        wb = max(3, int((abs(vb) / max_v) * bar_max_w)) if vb != 0 else 0
         fa = fmt_moneda_ec(va, dec=2) if es_moneda else fmt_miles_comas(va, dec=0 if float(va).is_integer() else 2)
         fb = fmt_moneda_ec(vb, dec=2) if es_moneda else fmt_miles_comas(vb, dec=0 if float(vb).is_integer() else 2)
-        elems.append(f'<text x="8" y="{y + 18}" font-size="12" font-weight="800" fill="#0F172A">{lbl}</text>')
-        elems.append(f'<rect x="{left_w}" y="{y + 3}" width="{wa}" height="12" rx="3" fill="{color_a}"/>')
-        elems.append(f'<text x="{left_w + wa + 6}" y="{y + 13}" font-size="11" font-weight="700" fill="#0F172A">{html.escape(fa)}</text>')
-        elems.append(f'<rect x="{left_w}" y="{y + 19}" width="{wb}" height="12" rx="3" fill="{color_b}"/>')
-        elems.append(f'<text x="{left_w + wb + 6}" y="{y + 29}" font-size="11" font-weight="600" fill="#334155">{html.escape(fb)}</text>')
-        elems.append(f'<line x1="8" y1="{y + 37}" x2="{svg_w - 8}" y2="{y + 37}" stroke="#E2E8F0" stroke-width="1"/>')
+        elems.append(f'<text x="10" y="{y + 24}" font-size="16" font-weight="800" fill="#0F172A">{lbl}</text>')
+        elems.append(f'<rect x="{left_w}" y="{y + 4}" width="{wa}" height="17" rx="4" fill="{color_a}"/>')
+        elems.append(f'<text x="{left_w + wa + 10}" y="{y + 18}" font-size="15" font-weight="800" fill="#0F172A">{html.escape(fa)}</text>')
+        elems.append(f'<rect x="{left_w}" y="{y + 25}" width="{wb}" height="17" rx="4" fill="{color_b}"/>')
+        elems.append(f'<text x="{left_w + wb + 10}" y="{y + 39}" font-size="15" font-weight="700" fill="#1E293B">{html.escape(fb)}</text>')
+        elems.append(f'<line x1="10" y1="{y + 50}" x2="{svg_w - 10}" y2="{y + 50}" stroke="#E2E8F0" stroke-width="1"/>')
 
     svg_html = (
         f'<div class="chart-card notranslate" translate="no"><div class="chart-title">{html.escape(titulo)}</div>'
@@ -1120,22 +1115,22 @@ def render_svg_barras_simples(df_plot, label_col, val_col, titulo, color_pos="#1
         return
     filas = df_plot.head(10).to_dict(orient="records")
     max_v = max([abs(float(r.get(val_col, 0) or 0)) for r in filas] + [1.0])
-    row_h = 30
-    left_w = 145
-    bar_max_w = 385
-    svg_w = left_w + bar_max_w + 150
-    svg_h = len(filas) * row_h + 12
+    row_h = 42
+    left_w = 210
+    bar_max_w = 510
+    svg_w = left_w + bar_max_w + 220
+    svg_h = len(filas) * row_h + 14
     elems = []
     for i, r in enumerate(filas):
-        y = 6 + i * row_h
-        lbl = html.escape(str(r.get(label_col, ""))[:20])
+        y = 8 + i * row_h
+        lbl = html.escape(str(r.get(label_col, ""))[:24])
         v = float(r.get(val_col, 0) or 0)
-        w = max(2, int((abs(v) / max_v) * bar_max_w)) if v != 0 else 0
+        w = max(3, int((abs(v) / max_v) * bar_max_w)) if v != 0 else 0
         col_b = color_neg if v < 0 else color_pos
         fv = fmt_moneda_ec(v, dec=2) if es_moneda else fmt_miles_comas(v, dec=0 if float(v).is_integer() else 2)
-        elems.append(f'<text x="8" y="{y + 16}" font-size="11.5" font-weight="700" fill="#0F172A">{lbl}</text>')
-        elems.append(f'<rect x="{left_w}" y="{y + 4}" width="{w}" height="16" rx="3" fill="{col_b}"/>')
-        elems.append(f'<text x="{left_w + w + 6}" y="{y + 16}" font-size="11" font-weight="700" fill="#0F172A">{html.escape(fv)}</text>')
+        elems.append(f'<text x="10" y="{y + 22}" font-size="15.5" font-weight="800" fill="#0F172A">{lbl}</text>')
+        elems.append(f'<rect x="{left_w}" y="{y + 6}" width="{w}" height="22" rx="4" fill="{col_b}"/>')
+        elems.append(f'<text x="{left_w + w + 10}" y="{y + 22}" font-size="15" font-weight="800" fill="#0F172A">{html.escape(fv)}</text>')
     st.markdown(
         f'<div class="chart-card notranslate" translate="no"><div class="chart-title">{html.escape(titulo)}</div>'
         f'<svg width="100%" viewBox="0 0 {svg_w} {svg_h}" style="max-width:100%;height:auto;display:block;">'
@@ -1150,41 +1145,34 @@ def render_graficos_avance_operativo(df_sku_consol, df_bod_av):
     if df_bod_av is None or df_bod_av.empty:
         return
 
-    c_g1, c_g2 = st.columns(2)
-    with c_g1:
-        render_svg_barras_comparativas(
-            df_bod_av, "Bodega", "SKU_Contados", "SKU_Teoricos",
-            "Totales de SKUs: Auditados vs. Teóricos por Bodega",
-            "SKUs Contados", "SKUs Teóricos",
-            color_a="#16A34A", color_b="#1E3A8A", es_moneda=False,
-        )
-    with c_g2:
-        render_svg_barras_comparativas(
-            df_bod_av, "Bodega", "Cantidad_Q", "QSA_Teorico_Tot",
-            "Totales en Cantidades (Unidades): Q Contada vs. QSA Teórico",
-            "Q Física Contada", "QSA Teórico Total",
-            color_a="#2563EB", color_b="#64748B", es_moneda=False,
-        )
-
-    c_g3, c_g4 = st.columns(2)
-    with c_g3:
-        render_svg_barras_comparativas(
-            df_bod_av, "Bodega", "Costo_Total_USD", "Costo_Dif_USD",
-            "Totales en Valores (USD): Valor Contado vs. Impacto Diferencia",
-            "Valor Total Contado", "Impacto Dif. Neto",
-            color_a="#0284C7", color_b="#F59E0B", es_moneda=True,
-        )
-    with c_g4:
-        df_tot_nac = pd.DataFrame([
-            {"Concepto": "SKUs Teóricos", "Total": float(df_bod_av["SKU_Teoricos"].sum())},
-            {"Concepto": "SKUs Contados", "Total": float(df_bod_av["SKU_Contados"].sum())},
-            {"Concepto": "SKUs Pendientes", "Total": float(df_bod_av["SKU_Pendientes"].sum())},
-        ])
-        render_svg_barras_simples(
-            df_tot_nac, "Concepto", "Total",
-            "Consolidado Global de Cobertura de SKUs (Filtro Activo)",
-            color_pos="#0F172A", es_moneda=False,
-        )
+    render_svg_barras_comparativas(
+        df_bod_av, "Bodega", "SKU_Contados", "SKU_Teoricos",
+        "Totales de SKUs: Auditados vs. Teóricos por Bodega",
+        "SKUs Contados", "SKUs Teóricos",
+        color_a="#16A34A", color_b="#1E3A8A", es_moneda=False,
+    )
+    render_svg_barras_comparativas(
+        df_bod_av, "Bodega", "Cantidad_Q", "QSA_Teorico_Tot",
+        "Totales en Cantidades (Unidades): Q Contada vs. QSA Teórico",
+        "Q Física Contada", "QSA Teórico Total",
+        color_a="#2563EB", color_b="#64748B", es_moneda=False,
+    )
+    render_svg_barras_comparativas(
+        df_bod_av, "Bodega", "Costo_Total_USD", "Costo_Dif_USD",
+        "Totales en Valores (USD): Valor Contado vs. Impacto Diferencia",
+        "Valor Total Contado", "Impacto Dif. Neto",
+        color_a="#0284C7", color_b="#F59E0B", es_moneda=True,
+    )
+    df_tot_nac = pd.DataFrame([
+        {"Concepto": "SKUs Teóricos", "Total": float(df_bod_av["SKU_Teoricos"].sum())},
+        {"Concepto": "SKUs Contados", "Total": float(df_bod_av["SKU_Contados"].sum())},
+        {"Concepto": "SKUs Pendientes", "Total": float(df_bod_av["SKU_Pendientes"].sum())},
+    ])
+    render_svg_barras_simples(
+        df_tot_nac, "Concepto", "Total",
+        "Consolidado Global de Cobertura de SKUs (Filtro Activo)",
+        color_pos="#0F172A", es_moneda=False,
+    )
 
 
 def render_tabla_segura(df_in, cols, max_filas=50):
@@ -1836,6 +1824,20 @@ with tab_op:
     sel_combo = st.selectbox("Catálogo Teórico:", opts, key=f"cb_{bod_norm}_{cap_v}")
     pre_sku = norm_mayus_limpio(sel_combo.split(" | ")[0]) if sel_combo != "-- SELECCIONE O ESCANEE SKU --" else ""
 
+    if skus_unicos:
+        vista_muestra_html = []
+        for s_item in skus_unicos[:8]:
+            d_item = html.escape(desc_map.get(s_item, "")[:34])
+            if s_item in ya_aud:
+                est_badge = "<b>[AUDITADO]</b>"
+            else:
+                est_badge = "[PENDIENTE]"
+            vista_muestra_html.append(f"<code>{html.escape(s_item)}</code> {est_badge} {d_item}")
+        st.markdown(
+            f'<div class="guia-sku-box"><b>Vista de estados teóricos (muestra):</b> ' + " &nbsp;•&nbsp; ".join(vista_muestra_html) + "</div>",
+            unsafe_allow_html=True,
+        )
+
     sku_detectado_foto = ""
     with st.expander("Cámara: Lector de Código de Barras (ZXing) & Foto Evidencia con Lectura"):
         t_scan, t_foto = st.tabs(["1. Lector Código de Barras (ZXing)", "2. Foto Evidencia"])
@@ -2144,22 +2146,21 @@ with tab_dash:
         st.divider()
         render_graficos_avance_operativo(df_sku_rep, df_bod_av)
         st.divider()
-        g1, g2 = st.columns(2)
-        with g1:
-            df_cus_g = (
-                df_rep[~df_rep["ESTADO"].isin(["PENDIENTE_REVERSO", "REVERSO_RECHAZADO"])]
-                .groupby("Correo_Usuario", as_index=False)
-                .agg(Transacciones=("ID_Tx", "count"), Unidades_Q=("Q", "sum"))
-                .sort_values("Transacciones", ascending=False)
-            )
-            render_svg_barras_simples(df_cus_g, "Correo_Usuario", "Unidades_Q", "Totales de Unidades Contadas (Q) por Custodio", color_pos="#2563EB", es_moneda=False)
-        with g2:
-            df_est_g = (
-                df_sku_rep.groupby("Estado_Neto", as_index=False)
-                .agg(SKUs=("COD_SKU", "count"), Costo_Dif_Neto=("Costo_Dif_Neto", "sum"))
-                if not df_sku_rep.empty else pd.DataFrame()
-            )
-            render_svg_barras_simples(df_est_g, "Estado_Neto", "Costo_Dif_Neto", "Impacto Económico Total por Estado de SKU", color_pos="#16A34A", color_neg="#DC2626", es_moneda=True)
+
+        df_cus_g = (
+            df_rep[~df_rep["ESTADO"].isin(["PENDIENTE_REVERSO", "REVERSO_RECHAZADO"])]
+            .groupby("Correo_Usuario", as_index=False)
+            .agg(Transacciones=("ID_Tx", "count"), Unidades_Q=("Q", "sum"))
+            .sort_values("Transacciones", ascending=False)
+        )
+        render_svg_barras_simples(df_cus_g, "Correo_Usuario", "Unidades_Q", "Totales de Unidades Contadas (Q) por Custodio", color_pos="#2563EB", es_moneda=False)
+
+        df_est_g = (
+            df_sku_rep.groupby("Estado_Neto", as_index=False)
+            .agg(SKUs=("COD_SKU", "count"), Costo_Dif_Neto=("Costo_Dif_Neto", "sum"))
+            if not df_sku_rep.empty else pd.DataFrame()
+        )
+        render_svg_barras_simples(df_est_g, "Estado_Neto", "Costo_Dif_Neto", "Impacto Económico Total por Estado de SKU", color_pos="#16A34A", color_neg="#DC2626", es_moneda=True)
 
         st.divider()
         st.markdown("#### Matriz de Avance y Valoración Total por Bodega")
@@ -2185,7 +2186,7 @@ with tab_dash:
 
 with tab_etq:
     st.markdown("### Cola de Etiquetas (~5,8 × 2,5 cm) & Armado de Hoja A4")
-    st.caption("Diseño centrado: `DESCRIPCIÓN` arriba + código de barras `CODE 128` al centro + `COD_SKU` abajo.")
+    st.caption("Diseño centrado: `DESCRIPCIÓN` arriba + código de barras `CODE 128` al centro + `COD_SKU` abajo + bodega en negrita inferior izquierda.")
     ec1, ec2, ec3, ec4 = st.columns([2.2, 1.0, 1.0, 1.4])
     sku_etq_man = norm_mayus_limpio(ec1.text_input("Agregar COD_SKU a cola:", key="sku_etq_man_in"))
     cop_etq_man = ec2.number_input("Copias:", min_value=1, max_value=33, value=1, step=1, key="cop_etq_man_in")
