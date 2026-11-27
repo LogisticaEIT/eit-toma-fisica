@@ -64,7 +64,8 @@ st.markdown(
     [data-testid="stSidebar"] summary {
         color: #F8FAFC !important;
     }
-    [data-testid="stSidebar"] details {
+    [data-testid="stSidebar"] details,
+    [data-testid="stSidebar"] [data-testid="stExpander"] details {
         background-color: #1E293B !important;
         border: 1px solid #334155 !important;
         border-radius: 8px !important;
@@ -82,6 +83,18 @@ st.markdown(
     [data-testid="stSidebar"] hr {
         border-color: #475569 !important;
         margin: 10px 0 !important;
+    }
+    [data-testid="stMain"] [data-testid="stExpander"] summary,
+    [data-testid="stMain"] [data-testid="stExpander"] summary *,
+    [data-testid="stMain"] [data-testid="stTabs"] button,
+    [data-testid="stMain"] [data-testid="stTabs"] button * {
+        color: #0F172A !important;
+        font-weight: 700 !important;
+    }
+    [data-testid="stMain"] [data-testid="stExpander"] details {
+        background-color: #FFFFFF !important;
+        border: 1px solid #CBD5E1 !important;
+        border-radius: 8px !important;
     }
     .main-title {
         background: #0F172A; color: #FFFFFF !important; padding: 14px 18px; border-radius: 10px;
@@ -383,7 +396,6 @@ def render_hoja_a4_etiquetas(cola, cod_label="LBL-EIT-A4", ancho_mm=58, alto_mm=
 
 
 def generar_pin_transaccion(pin_base="7031", tx_id="", bod="", cod_sku="", q_val=0):
-    """Genera un PIN único de 4 dígitos por cada transacción / reverso."""
     tx_n = norm_mayus_limpio(tx_id)
     bod_n = norm_bod(bod)
     sku_n = norm_mayus_limpio(cod_sku)
@@ -993,10 +1005,11 @@ def obtener_costo_nac_col_w(row):
     return 0.0
 
 
-def obtener_skus_teoricos_bodega(nac_rows, dict_maestro, bod, muestreo=True):
+def obtener_skus_teoricos_bodega(nac_rows, dict_maestro, bod, muestreo=True, regs_respaldo=None):
     skus_set = set()
     desc_map = {}
-    idx_b = resolver_col_bodega(nac_rows, bod)
+    bod_n = norm_bod(bod)
+    idx_b = resolver_col_bodega(nac_rows, bod_n)
     if nac_rows and len(nac_rows) > 1:
         for row in nac_rows[1:]:
             if not row or len(row) == 0 or row[0] is None:
@@ -1015,6 +1028,14 @@ def obtener_skus_teoricos_bodega(nac_rows, dict_maestro, bod, muestreo=True):
         for sv, info in dict_maestro.items():
             skus_set.add(sv)
             desc_map[sv] = next((v for k, v in info.items() if "DESC" in k), "")
+    if not skus_set and regs_respaldo:
+        for r in regs_respaldo:
+            if norm_bod(r.get("Bodega", "")) == bod_n:
+                sv = norm_mayus_limpio(r.get("COD_SKU", ""))
+                if sv:
+                    skus_set.add(sv)
+                    if sv not in desc_map:
+                        desc_map[sv] = str(r.get("DESCRIPCIÓN", "") or "").strip()
     return sorted(skus_set), desc_map
 
 
@@ -1257,29 +1278,43 @@ def decodificar_sku_desde_imagen_bytes(img_bytes):
 
 def render_lector_codigos_barras(comp_key):
     html_code = f"""
-    <div class="notranslate" translate="no" style="font-family:sans-serif;padding:8px;background:#F8FAFC;border:1px solid #CBD5E1;border-radius:8px;">
+    <div class="notranslate" translate="no" style="font-family:sans-serif;padding:10px;background:#FFFFFF;border:1px solid #94A3B8;border-radius:8px;color:#0F172A;">
       <div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:8px;">
-        <button id="btnStartScan_{comp_key}" type="button" style="padding:8px 12px;background:#0F172A;color:#FFF;border:none;border-radius:6px;font-weight:700;cursor:pointer;">Activar cámara ZXing</button>
-        <button id="btnStopScan_{comp_key}" type="button" style="padding:8px 12px;background:#475569;color:#FFF;border:none;border-radius:6px;font-weight:700;cursor:pointer;">Detener cámara</button>
+        <button id="btnStartScan_{comp_key}" type="button" style="padding:9px 13px;background:#0F172A;color:#FFF;border:none;border-radius:6px;font-weight:700;cursor:pointer;">Activar cámara</button>
+        <button id="btnSnapScan_{comp_key}" type="button" style="padding:9px 13px;background:#D97706;color:#FFF;border:none;border-radius:6px;font-weight:700;cursor:pointer;">Capturar cuadro ahora</button>
+        <button id="btnStopScan_{comp_key}" type="button" style="padding:9px 13px;background:#475569;color:#FFF;border:none;border-radius:6px;font-weight:700;cursor:pointer;">Detener</button>
       </div>
-      <video id="vidScan_{comp_key}" playsinline muted style="width:100%;max-height:220px;background:#0F172A;border-radius:6px;display:none;"></video>
-      <div id="resScan_{comp_key}" style="margin-top:6px;font-size:13px;font-weight:700;color:#1E3A8A;">Enfoca el código de barras. Al leerlo, ve a Cantidad (Q) antes de pulsar REGISTRAR.</div>
+      <div style="position:relative;width:100%;min-height:230px;background:#0F172A;border-radius:8px;overflow:hidden;display:flex;align-items:center;justify-content:center;">
+        <video id="vidScan_{comp_key}" playsinline muted style="width:100%;min-height:230px;max-height:310px;object-fit:cover;display:none;"></video>
+        <span id="phScan_{comp_key}" style="color:#E2E8F0;font-size:13px;font-weight:700;padding:12px;text-align:center;">Pulsa "Activar cámara" para ver el código de barras en pantalla amplia.</span>
+      </div>
+      <canvas id="cvsScan_{comp_key}" style="display:none;"></canvas>
+      <div style="display:flex;gap:6px;margin-top:8px;align-items:center;">
+        <input id="inpManualScan_{comp_key}" type="text" placeholder="Si prefieres, digita/pega SKU y pulsa Usar SKU" style="flex:1;padding:8px 10px;border:1.5px solid #D97706;background:#FEF3C7;color:#451A03;border-radius:6px;font-weight:700;font-size:13px;" />
+        <button id="btnUseManual_{comp_key}" type="button" style="padding:8px 12px;background:#16A34A;color:#FFF;border:none;border-radius:6px;font-weight:700;cursor:pointer;">Usar SKU</button>
+      </div>
+      <div id="resScan_{comp_key}" style="margin-top:8px;font-size:13px;font-weight:800;color:#1E3A8A;">Listo para escanear. Centra el código y usa "Capturar cuadro ahora" si tarda en leer.</div>
     </div>
     <script src="https://cdn.jsdelivr.net/npm/@zxing/library@0.21.3/umd/index.min.js"></script>
     <script>
     (function() {{
       const btnStart = document.getElementById("btnStartScan_{comp_key}");
+      const btnSnap = document.getElementById("btnSnapScan_{comp_key}");
       const btnStop = document.getElementById("btnStopScan_{comp_key}");
+      const btnUseManual = document.getElementById("btnUseManual_{comp_key}");
+      const inpManual = document.getElementById("inpManualScan_{comp_key}");
       const video = document.getElementById("vidScan_{comp_key}");
+      const canvas = document.getElementById("cvsScan_{comp_key}");
+      const phScan = document.getElementById("phScan_{comp_key}");
       const statusEl = document.getElementById("resScan_{comp_key}");
       let reader = null;
       let stream = null;
       let activo = false;
 
-      function aplicarCodigo(codigo) {{
+      function aplicarCodigo(codigo, detenerCamara) {{
         const limpio = String(codigo || "").trim().toUpperCase();
         if (!limpio) return;
-        statusEl.textContent = "LEÍDO: " + limpio + " -> Ingresa Cantidad (Q) y luego pulsa REGISTRAR.";
+        statusEl.textContent = "LEÍDO: " + limpio + " -> Ingresa Cantidad (Q) y pulsa REGISTRAR.";
         try {{
           if (navigator.clipboard && navigator.clipboard.writeText) {{
             navigator.clipboard.writeText(limpio).catch(() => {{}});
@@ -1303,7 +1338,9 @@ def render_lector_codigos_barras(comp_key):
             cantInput.select();
           }}
         }} catch(e) {{}}
-        detener();
+        if (detenerCamara !== false) {{
+          detener();
+        }}
       }}
 
       function detener() {{
@@ -1314,31 +1351,81 @@ def render_lector_codigos_barras(comp_key):
           stream = null;
         }}
         video.style.display = "none";
+        phScan.style.display = "block";
+      }}
+
+      async function capturarCuadro() {{
+        if (!stream || video.readyState < 2) {{
+          statusEl.textContent = "Primero activa la cámara para capturar un cuadro.";
+          return;
+        }}
+        const w = video.videoWidth || 1280;
+        const h = video.videoHeight || 720;
+        canvas.width = w;
+        canvas.height = h;
+        const ctx = canvas.getContext("2d");
+        ctx.drawImage(video, 0, 0, w, h);
+        const dataUrl = canvas.toDataURL("image/png");
+        let detectado = "";
+        try {{
+          if ("BarcodeDetector" in window) {{
+            const det = new window.BarcodeDetector({{ formats: ["code_128", "code_39", "ean_13", "ean_8", "upc_a", "upc_e", "qr_code", "itf", "codabar"] }});
+            const codes = await det.detect(canvas);
+            if (codes && codes.length > 0 && codes[0].rawValue) {{
+              detectado = codes[0].rawValue;
+            }}
+          }}
+        }} catch(e) {{}}
+        if (!detectado && window.ZXing && window.ZXing.BrowserMultiFormatReader) {{
+          try {{
+            const tmpReader = new window.ZXing.BrowserMultiFormatReader();
+            const res = await tmpReader.decodeFromImageUrl(dataUrl);
+            if (res && res.text) {{
+              detectado = res.text;
+            }}
+          }} catch(e) {{}}
+        }}
+        if (detectado) {{
+          aplicarCodigo(detectado, true);
+        }} else {{
+          const sug = (inpManual.value || "").trim().toUpperCase();
+          if (sug) {{
+            aplicarCodigo(sug, true);
+          }} else {{
+            statusEl.textContent = "Cuadro capturado sin lectura automática: acerca más el código o escríbelo arriba y pulsa Usar SKU.";
+            inpManual.focus();
+          }}
+        }}
       }}
 
       async function iniciar() {{
         detener();
         activo = true;
         if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {{
-          statusEl.textContent = "Sin acceso directo a cámara. Usa Foto Evidencia o digita COD_SKU.";
+          statusEl.textContent = "Sin acceso directo a cámara. Digita el SKU arriba o usa Foto Evidencia.";
           return;
         }}
         try {{
           stream = await navigator.mediaDevices.getUserMedia({{
-            video: {{ facingMode: {{ ideal: "environment" }} }},
+            video: {{
+              facingMode: {{ ideal: "environment" }},
+              width: {{ ideal: 1280 }},
+              height: {{ ideal: 720 }}
+            }},
             audio: false
           }});
           video.srcObject = stream;
+          phScan.style.display = "none";
           video.style.display = "block";
           await video.play();
-          statusEl.textContent = "Cámara activa: centrando código de barras...";
+          statusEl.textContent = "Cámara activa: enfoca el código o pulsa Capturar cuadro ahora.";
 
           if (window.ZXing && window.ZXing.BrowserMultiFormatReader) {{
             reader = new window.ZXing.BrowserMultiFormatReader();
             reader.decodeFromVideoElementContinuously(video, (result, err) => {{
               if (!activo) return;
               if (result && result.text) {{
-                aplicarCodigo(result.text);
+                aplicarCodigo(result.text, true);
               }}
             }});
           }} else if ("BarcodeDetector" in window) {{
@@ -1349,24 +1436,24 @@ def render_lector_codigos_barras(comp_key):
                 const codes = await det.detect(video);
                 if (codes && codes.length > 0 && codes[0].rawValue) {{
                   clearInterval(iv);
-                  aplicarCodigo(codes[0].rawValue);
+                  aplicarCodigo(codes[0].rawValue, true);
                 }}
               }} catch(e) {{}}
-            }}, 350);
-          }} else {{
-            statusEl.textContent = "Cámara abierta. Usa Foto Evidencia para capturar o digita COD_SKU.";
+            }}, 300);
           }}
         }} catch(err) {{
-          statusEl.textContent = "No se pudo abrir cámara. Usa Foto Evidencia o digita COD_SKU.";
+          statusEl.textContent = "No se pudo abrir cámara. Digita el SKU arriba o usa Foto Evidencia.";
         }}
       }}
 
       btnStart.addEventListener("click", iniciar);
+      btnSnap.addEventListener("click", capturarCuadro);
       btnStop.addEventListener("click", detener);
+      btnUseManual.addEventListener("click", () => aplicarCodigo(inpManual.value, false));
     }})();
     </script>
     """
-    components.html(html_code, height=290)
+    components.html(html_code, height=430)
 
 
 def excel_bytes(df, nac_rows=None, muestreo=True):
@@ -1781,7 +1868,7 @@ with tab_op:
         if str(r.get("Periodo", "")).strip() == periodo_act and norm_bod(r.get("Bodega", "")) == bod_norm and es_computable_en_consolidado(r)
     }
 
-    skus_unicos, desc_map = obtener_skus_teoricos_bodega(nac_rows, dict_maestro, bod_norm, muestreo=muestreo)
+    skus_unicos, desc_map = obtener_skus_teoricos_bodega(nac_rows, dict_maestro, bod_norm, muestreo=muestreo, regs_respaldo=regs_json)
     tot_teo_bod = len(skus_unicos)
     aud_bod_cnt = len([s for s in skus_unicos if s in ya_aud])
     pend_bod_cnt = max(tot_teo_bod - aud_bod_cnt, 0)
@@ -1823,8 +1910,8 @@ with tab_op:
     )
 
     sku_detectado_foto = ""
-    with st.expander("Cámara: Lector de Código de Barras (ZXing) & Foto Evidencia con Lectura"):
-        t_scan, t_foto = st.tabs(["1. Lector Código de Barras (ZXing)", "2. Foto Evidencia"])
+    with st.expander("Cámara: Lector de Código de Barras & Foto Evidencia", expanded=False):
+        t_scan, t_foto = st.tabs(["1. Lector Código de Barras", "2. Foto Evidencia"])
         with t_scan:
             render_lector_codigos_barras(f"{bod_norm}_{cap_v}")
         with t_foto:
@@ -2187,6 +2274,11 @@ with tab_dash:
 
     if df_rep.empty:
         st.info("No hay registros que coincidan con los filtros seleccionados en la carpeta 3 del panel izquierdo.")
+        if not df_base_rep.empty:
+            st.warning(f"Hay {len(df_base_rep)} fila(s) base disponibles pero 0 con el filtro actual (`Periodo: {f_per}`, `Bodega: {f_bod}`, `Ciudad: {f_ciu}`).")
+            if st.button("Mostrar todos los registros (Ver todo)", key="btn_ver_todo_dash"):
+                resetear_filtros_estadistica()
+                st.rerun()
     else:
         sob_cnt = int((df_sku_rep["Estado_Neto"] == "SOBRANTE").sum()) if not df_sku_rep.empty else 0
         fal_cnt = int((df_sku_rep["Estado_Neto"] == "FALTANTE").sum()) if not df_sku_rep.empty else 0
