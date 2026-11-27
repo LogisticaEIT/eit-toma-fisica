@@ -198,6 +198,7 @@ st.session_state.setdefault("ultimo_disparo_ts", 0.0)
 st.session_state.setdefault("ultimo_disparo_firma", "")
 st.session_state.setdefault("ultimo_tx_resumen", "")
 st.session_state.setdefault("tx_reverso_draft", "")
+st.session_state.setdefault("ultima_q_valida", 1)
 
 
 def norm_mayus_limpio(v):
@@ -925,7 +926,6 @@ def datos_combinados(incluir_gs=False):
 
 
 def construir_respaldo_desde_historial(regs_fuente):
-    """Reconstruye ficha de SKU y último QSA_Teorico conocido por bodega desde registros previos/GS."""
     ficha_sku = {}
     teo_bod_sku = {}
     if not isinstance(regs_fuente, list):
@@ -1758,6 +1758,7 @@ f_cus = "TODOS"
 f_sku = "TODOS"
 f_prv = "TODOS"
 
+
 def resetear_filtros_estadistica():
     st.session_state["flt_per"] = "TODOS"
     st.session_state["flt_bod"] = "TODAS"
@@ -1765,6 +1766,7 @@ def resetear_filtros_estadistica():
     st.session_state["flt_cus"] = "TODOS"
     st.session_state["flt_sku"] = "TODOS"
     st.session_state["flt_prv"] = "TODOS"
+
 
 if es_admin:
     with st.sidebar.expander("3. Filtros de Estadística & Reportes", expanded=False):
@@ -2036,11 +2038,19 @@ with tab_op:
         _inyectar_sku_y_enfocar_cantidad(sku_detectado_foto)
 
     q_key = f"q_{bod_norm}_{cap_v}"
-    valor_inicial_q = 0 if (cod_sku and st.session_state.get("sku_pend_scan") == cod_sku) else 1
+    es_pend_scan_act = bool(cod_sku and st.session_state.get("sku_pend_scan") == cod_sku and not st.session_state.get("scan_confirmado_cant"))
+    valor_inicial_q = 0 if es_pend_scan_act else int(st.session_state.get("ultima_q_valida", 1) or 1)
+    if valor_inicial_q == 0 and not es_pend_scan_act:
+        valor_inicial_q = 1
+
     cant = c5.number_input("Cantidad (Q):", step=1, value=valor_inicial_q, key=q_key)
-    cant_modificada = (float(cant) != float(valor_inicial_q)) or (q_key in st.session_state and float(st.session_state[q_key]) != float(valor_inicial_q))
-    if cant != 0 and cod_sku and st.session_state.get("sku_pend_scan") == cod_sku:
-        st.session_state["scan_confirmado_cant"] = True
+    if float(cant) != 0.0:
+        st.session_state["ultima_q_valida"] = cant
+        if cod_sku and st.session_state.get("sku_pend_scan") == cod_sku:
+            st.session_state["scan_confirmado_cant"] = True
+
+    q_efectiva = float(cant) if float(cant) != 0.0 else (0.0 if es_pend_scan_act else float(st.session_state.get("ultima_q_valida", 0) or 0))
+    cant_modificada = (q_efectiva != float(valor_inicial_q))
 
     motivo = ""
     pin_ingresado = ""
@@ -2048,7 +2058,7 @@ with tab_op:
     tx_borrador_pin = ""
     pin_tx_esperado = ""
 
-    if cant < 0:
+    if q_efectiva < 0:
         if not st.session_state.get("tx_reverso_draft"):
             st.session_state["tx_reverso_draft"] = f"TX-{datetime.now().strftime('%Y%m%d%H%M%S')}"
         tx_borrador_pin = st.session_state["tx_reverso_draft"]
@@ -2057,7 +2067,7 @@ with tab_op:
             tx_id=tx_borrador_pin,
             bod=bod_norm,
             cod_sku=cod_sku,
-            q_val=cant,
+            q_val=q_efectiva,
         )
         r_m1, r_m2 = st.columns([2.2, 1.3])
         motivo = norm_mayus_limpio(r_m1.text_input("Motivo Reverso (Col K obligatorio si Q < 0):", key=f"mot_{bod_norm}_{cap_v}"))
@@ -2077,10 +2087,10 @@ with tab_op:
 
     c6.write("")
     c6.write("")
-    ok_rev = (cant >= 0) or bool(motivo)
+    ok_rev = (q_efectiva >= 0) or bool(motivo)
     ubic_valida = bool(ubic) and ubic not in ["UBICACIÓN", "UBICACION", "ESPECIFIQUE"]
-    es_scan_sin_cant = bool(cod_sku and st.session_state.get("sku_pend_scan") == cod_sku and cant == 0)
-    puede = st.session_state["per_abierto"] and ubic_valida and bool(cod_sku) and (cant != 0) and ok_rev and not es_scan_sin_cant
+    es_scan_sin_cant = bool(cod_sku and st.session_state.get("sku_pend_scan") == cod_sku and q_efectiva == 0)
+    puede = st.session_state["per_abierto"] and ubic_valida and bool(cod_sku) and (q_efectiva != 0) and ok_rev and not es_scan_sin_cant
     btn_reg = c6.button("REGISTRAR", use_container_width=True, disabled=not puede, key="btn_reg_tx")
 
     e_col1, e_col2, e_col3 = st.columns([2.2, 1.0, 1.8])
@@ -2101,7 +2111,7 @@ with tab_op:
         faltan.append("Ubicación")
     if not cod_sku:
         faltan.append("COD_SKU")
-    if cant == 0:
+    if q_efectiva == 0:
         faltan.append("Anotar Cantidad (Q) distinta de 0")
     if not ok_rev:
         faltan.append("Motivo Reverso")
@@ -2161,11 +2171,11 @@ with tab_op:
             f"<b>Costo Unit:</b> {fmt_moneda_ec(c_unit_vista, 4)}"
         )
         if cant_modificada:
-            aplica_rev_ya = (cant >= 0) or es_admin or pin_valido_cust
-            aporte_proy = float(cant) if aplica_rev_ya else 0.0
+            aplica_rev_ya = (q_efectiva >= 0) or es_admin or pin_valido_cust
+            aporte_proy = float(q_efectiva) if aplica_rev_ya else 0.0
             q_acum_calc = round(float(prev_comp) + aporte_proy, 4)
             dif_proy = round(q_acum_calc - float(st_teo), 4)
-            nota_proy = " (Reverso pendiente de aprobación)" if (cant < 0 and not aplica_rev_ya) else ""
+            nota_proy = " (Reverso pendiente de aprobación)" if (q_efectiva < 0 and not aplica_rev_ya) else ""
             linea_2 = (
                 f"<b>Acum. Anterior:</b> {fmt_miles_comas(prev_comp, 2)} &nbsp;|&nbsp; "
                 f"<b>Dif. Actual:</b> {fmt_miles_comas(dif_actual_sin_q, 2)} &nbsp;|&nbsp; "
@@ -2189,7 +2199,14 @@ with tab_op:
         m2.markdown(f'<div class="saldo-box notranslate" translate="no"><span class="saldo-lbl">Nacional</span><span class="saldo-val">{fmt_miles_comas(st_nac, 0 if float(st_nac).is_integer() else 2)}</span></div>', unsafe_allow_html=True)
 
     if btn_reg:
-        firma_actual = f"{periodo_act}|{bod_norm}|{cod_sku}|{float(cant)}"
+        q_reg = float(cant)
+        if q_reg == 0.0 and not es_pend_scan_act:
+            q_reg = float(st.session_state.get("ultima_q_valida", 0) or 0)
+        if q_reg == 0.0:
+            st.warning("La Cantidad (Q) debe ser distinta de 0 antes de registrar.")
+            st.stop()
+
+        firma_actual = f"{periodo_act}|{bod_norm}|{cod_sku}|{q_reg}"
         ahora_epoch = time.time()
         if (
             st.session_state.get("ultimo_disparo_firma") == firma_actual
@@ -2247,10 +2264,10 @@ with tab_op:
                 tx_id=tx_id_nuevo,
                 bod=bod_norm,
                 cod_sku=cod_sku,
-                q_val=cant,
+                q_val=q_reg,
             )
             motivo_final = motivo
-            if cant < 0:
+            if q_reg < 0:
                 if es_admin:
                     est_rev_ini = "APROBADO"
                 elif pin_valido_cust:
@@ -2261,9 +2278,9 @@ with tab_op:
             else:
                 est_rev_ini = "NO_APLICA"
 
-            q_acum_final = round(float(prev_comp) + (float(cant) if est_rev_ini != "PENDIENTE_APROBACION" else 0.0), 4)
+            q_acum_final = round(float(prev_comp) + (q_reg if est_rev_ini != "PENDIENTE_APROBACION" else 0.0), 4)
             dif_f, est_f, costo_total, costo_dif, c_unit_limpio = calcular_dif_estado_costo(
-                q_acum_final, st_teo_r, cant, c_unit_r, est_rev=est_rev_ini
+                q_acum_final, st_teo_r, q_reg, c_unit_r, est_rev=est_rev_ini
             )
             desc_r = flex_r("DESCRIPCIÓN", "DESCRIPCION", "DESC")
             prov_r = norm_mayus_limpio(flex_r("PROVEEDOR", "COD_PROV", "PROV"))
@@ -2279,7 +2296,7 @@ with tab_op:
                 "Bodega": bod_norm,
                 "Ubicacion": ubic,
                 "COD_SKU": cod_sku,
-                "Q": float(cant),
+                "Q": q_reg,
                 "BOD/SKU": f"{bod_norm}-{cod_sku}",
                 "Motivo": motivo_final,
                 "Estado_Reverso": est_rev_ini,
@@ -2307,13 +2324,13 @@ with tab_op:
                 if est_rev_ini == "PENDIENTE_APROBACION":
                     st.session_state["ultimo_tx_resumen"] = (
                         f"<b>Último registro guardado:</b> <code>{html.escape(tx_id_nuevo)}</code> | "
-                        f"<b>SKU:</b> {html.escape(cod_sku)} | <b>Q:</b> {fmt_miles_comas(cant, 0)} | "
+                        f"<b>SKU:</b> {html.escape(cod_sku)} | <b>Q:</b> {fmt_miles_comas(q_reg, 0)} | "
                         f"<b>Estado:</b> PENDIENTE_REVERSO | <b>GS:</b> {html.escape(est_g)} ({html.escape(tx_g)})"
                     )
                 else:
                     st.session_state["ultimo_tx_resumen"] = (
                         f"<b>Último registro guardado:</b> <code>{html.escape(tx_id_nuevo)}</code> | "
-                        f"<b>SKU:</b> {html.escape(cod_sku)} | <b>Q:</b> {fmt_miles_comas(cant, 0)} | "
+                        f"<b>SKU:</b> {html.escape(cod_sku)} | <b>Q:</b> {fmt_miles_comas(q_reg, 0)} | "
                         f"<b>Acum:</b> {fmt_miles_comas(q_acum_final, 2)} | <b>Dif:</b> {fmt_miles_comas(dif_f, 2)} | "
                         f"<b>Estado:</b> {html.escape(est_f)} | <b>GS:</b> {html.escape(est_g)} ({html.escape(tx_g)})"
                     )
