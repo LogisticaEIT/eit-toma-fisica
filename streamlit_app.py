@@ -374,10 +374,14 @@ def render_hoja_a4_etiquetas(cola, cod_label="LBL-EIT-A4", ancho_mm=58, alto_mm=
     components.html(html_doc, height=540, scrolling=True)
 
 
-def generar_pin_diario(pin_base="7031", fecha_ref=None):
-    f_str = (fecha_ref or date.today()).strftime("%Y-%m-%d")
-    raw = f"{str(pin_base).strip()}|DIA|{f_str}".encode("utf-8")
-    dig = int(hashlib.sha256(raw).hexdigest()[:6], 16) % 10000
+def generar_pin_transaccion(pin_base="7031", tx_id="", bod="", cod_sku="", q_val=0):
+    """Genera un PIN único de 4 dígitos por cada transacción / reverso."""
+    tx_n = norm_mayus_limpio(tx_id)
+    bod_n = norm_bod(bod)
+    sku_n = norm_mayus_limpio(cod_sku)
+    q_n = float(q_val or 0.0)
+    raw = f"{str(pin_base).strip()}|TX|{tx_n}|{bod_n}|{sku_n}|{q_n}".encode("utf-8")
+    dig = int(hashlib.sha256(raw).hexdigest()[:8], 16) % 10000
     return f"{dig:04d}"
 
 
@@ -1845,7 +1849,6 @@ with tab_op:
     if sku_detectado_foto:
         _inyectar_sku_y_enfocar_cantidad(sku_detectado_foto)
 
-    # Si viene de escaneo, parte en 0 para obligar a anotar cantidad conscientemente
     valor_inicial_q = 0 if (cod_sku and st.session_state.get("sku_pend_scan") == cod_sku) else 1
     cant = c5.number_input("Cantidad (Q):", step=1, value=valor_inicial_q, key=f"q_{bod_norm}_{cap_v}")
     if cant != 0 and cod_sku and st.session_state.get("sku_pend_scan") == cod_sku:
@@ -1854,20 +1857,31 @@ with tab_op:
     motivo = ""
     pin_ingresado = ""
     pin_valido_cust = False
+    tx_borrador_pin = ""
+    pin_tx_esperado = ""
 
     if cant < 0:
+        tx_borrador_pin = f"TX-{datetime.now().strftime('%Y%m%d%H%M%S')}"
+        pin_tx_esperado = generar_pin_transaccion(
+            st.session_state["pin_reverso_act"],
+            tx_id=tx_borrador_pin,
+            bod=bod_norm,
+            cod_sku=cod_sku,
+            q_val=cant,
+        )
         r_m1, r_m2 = st.columns([2.2, 1.3])
         motivo = norm_mayus_limpio(r_m1.text_input("Motivo Reverso (Col K obligatorio si Q < 0):", key=f"mot_{bod_norm}_{cap_v}"))
         if not es_admin:
-            pin_dia = generar_pin_diario(st.session_state["pin_reverso_act"], date.today())
-            pin_ingresado = r_m2.text_input("PIN Día / Autorización (opcional):", max_chars=6, key=f"pin_{bod_norm}_{cap_v}").strip()
-            pin_valido_cust = bool(pin_ingresado) and (pin_ingresado == pin_dia or pin_ingresado == str(st.session_state["pin_reverso_act"]).strip())
+            pin_ingresado = r_m2.text_input(f"PIN único Tx ({tx_borrador_pin}):", max_chars=6, key=f"pin_{bod_norm}_{cap_v}").strip()
+            pin_valido_cust = bool(pin_ingresado) and (pin_ingresado == pin_tx_esperado)
             if pin_ingresado and not pin_valido_cust:
-                st.warning("PIN incorrecto: el reverso quedará **PENDIENTE_APROBACION** para revisión del admin.")
+                st.warning(f"PIN incorrecto para `{tx_borrador_pin}`: el reverso quedará **PENDIENTE_APROBACION** para revisión del admin.")
             elif pin_valido_cust:
-                st.success("PIN válido: reverso autorizado y aplicado al consolidado.")
+                st.success(f"PIN válido para `{tx_borrador_pin}`: reverso autorizado y aplicado al consolidado.")
             else:
-                st.info("Sin PIN ingresado: el reverso queda **PENDIENTE_APROBACION** en la bandeja del administrador.")
+                st.info(f"Sin PIN ingresado para `{tx_borrador_pin}`: el reverso queda **PENDIENTE_APROBACION** en la bandeja del administrador.")
+        else:
+            st.caption(f"PIN único generado para esta transacción (`{tx_borrador_pin}`): **`{pin_tx_esperado}`**")
 
     c6.write("")
     c6.write("")
@@ -2006,13 +2020,22 @@ with tab_op:
                 and norm_mayus_limpio(r.get("COD_SKU", "")) == cod_sku
                 and es_computable_en_consolidado(r)
             )
+            now = datetime.now()
+            tx_id_nuevo = f"TX-{now.strftime('%Y%m%d%H%M%S')}"
+            pin_tx_actual = generar_pin_transaccion(
+                st.session_state["pin_reverso_act"],
+                tx_id=tx_id_nuevo,
+                bod=bod_norm,
+                cod_sku=cod_sku,
+                q_val=cant,
+            )
             motivo_final = motivo
             if cant < 0:
                 if es_admin:
                     est_rev_ini = "APROBADO"
                 elif pin_valido_cust:
                     est_rev_ini = "APROBADO"
-                    motivo_final = f"{motivo} [PIN_AUTORIZADO]".strip()
+                    motivo_final = f"{motivo} [PIN_TX_{pin_tx_actual}_AUTORIZADO]".strip()
                 else:
                     est_rev_ini = "PENDIENTE_APROBACION"
             else:
@@ -2024,10 +2047,9 @@ with tab_op:
             )
             desc_r = flex_r("DESCRIPCIÓN", "DESCRIPCION", "DESC")
             prov_r = norm_mayus_limpio(flex_r("PROVEEDOR", "COD_PROV", "PROV"))
-            now = datetime.now()
             nuevo = {
                 "Periodo": periodo_act,
-                "ID_Tx": f"TX-{now.strftime('%Y%m%d%H%M%S')}",
+                "ID_Tx": tx_id_nuevo,
                 "Timestamp": now.strftime("%Y-%m-%d %H:%M:%S"),
                 "Correo_Usuario": usuario,
                 "Ciudad": norm_mayus_limpio(ciudad),
@@ -2059,9 +2081,9 @@ with tab_op:
                 st.session_state["sku_pend_scan"] = ""
                 st.session_state["scan_confirmado_cant"] = False
                 if est_rev_ini == "PENDIENTE_APROBACION":
-                    st.success(f"Reverso registrado en cola de aprobación ({cod_sku}, Q {fmt_miles_comas(cant, 0)}) -> PENDIENTE_REVERSO | GS: {est_g} ({tx_g})" if ok_g else f"Reverso guardado en cola local | GS: {est_g}")
+                    st.success(f"Reverso {tx_id_nuevo} en cola de aprobación ({cod_sku}, Q {fmt_miles_comas(cant, 0)}) -> PENDIENTE_REVERSO | GS: {est_g} ({tx_g})" if ok_g else f"Reverso guardado en cola local | GS: {est_g}")
                 else:
-                    st.success(f"Guardado {cod_sku} ({fmt_miles_comas(cant, 0)} | Acum {fmt_miles_comas(q_acum_final, 2)}) -> {est_f} (Dif {fmt_miles_comas(dif_f, 2)} | Costo U {fmt_moneda_ec(c_unit_limpio, 4)}) | GS: {est_g} ({tx_g})" if ok_g else f"Guardado local OK | GS: {est_g}")
+                    st.success(f"Guardado {tx_id_nuevo} | {cod_sku} ({fmt_miles_comas(cant, 0)} | Acum {fmt_miles_comas(q_acum_final, 2)}) -> {est_f} (Dif {fmt_miles_comas(dif_f, 2)} | Costo U {fmt_moneda_ec(c_unit_limpio, 4)}) | GS: {est_g} ({tx_g})" if ok_g else f"Guardado local OK | GS: {est_g}")
                 st.rerun()
 
     st.markdown("---")
@@ -2091,8 +2113,18 @@ with tab_dash:
             )
             lista_tx_pend = [norm_mayus_limpio(x) for x in pend_rev_df["ID_Tx"].tolist() if norm_mayus_limpio(x)]
             sel_tx_rev = st.selectbox("Seleccionar reverso pendiente:", lista_tx_pend, key="sel_tx_rev_admin")
-            pin_dia_act = generar_pin_diario(st.session_state["pin_reverso_act"], date.today())
-            st.caption(f"PIN diario activo ({date.today().strftime('%Y-%m-%d')}): **`{pin_dia_act}`** (PIN base: `{st.session_state['pin_reverso_act']}`)")
+            reg_sel_rev = next(
+                (r for r in pend_rev_df.to_dict(orient="records") if norm_mayus_limpio(r.get("ID_Tx", "")) == sel_tx_rev),
+                None,
+            )
+            pin_tx_sel = generar_pin_transaccion(
+                st.session_state["pin_reverso_act"],
+                tx_id=sel_tx_rev,
+                bod=reg_sel_rev.get("Bodega", "") if reg_sel_rev else "",
+                cod_sku=reg_sel_rev.get("COD_SKU", "") if reg_sel_rev else "",
+                q_val=reg_sel_rev.get("Q", 0) if reg_sel_rev else 0,
+            )
+            st.caption(f"PIN único para `{sel_tx_rev}`: **`{pin_tx_sel}`** (PIN base: `{st.session_state['pin_reverso_act']}`)")
             r_col1, r_col2 = st.columns(2)
             if r_col1.button("Aprobar Reverso", use_container_width=True, key="btn_aprobar_rev"):
                 ok_r, reg_mod = resolver_reverso_pendiente(sel_tx_rev, aprobar=True, admin_usr=usuario)
