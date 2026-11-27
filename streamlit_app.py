@@ -14,7 +14,6 @@ import csv
 import time
 import math
 import html
-import shutil
 import hashlib
 import urllib.parse
 import urllib3
@@ -41,7 +40,24 @@ st.markdown(
         background-color: #F8FAFC !important;
         color: #0F172A !important;
     }
-    [data-testid="stHeader"] { background-color: #F8FAFC !important; }
+    [data-testid="stHeader"], [data-testid="stToolbar"], [data-testid="stDecoration"] {
+        background-color: #F8FAFC !important;
+        color: #0F172A !important;
+    }
+    [data-testid="stSidebarCollapsedControl"],
+    [data-testid="stSidebarCollapsedControl"] button,
+    [data-testid="stSidebarCollapsedControl"] svg,
+    [data-testid="stHeader"] button,
+    [data-testid="stHeader"] svg {
+        color: #0F172A !important;
+        fill: #0F172A !important;
+        opacity: 1 !important;
+    }
+    [data-testid="stSidebarCollapsedControl"] button {
+        background-color: #FEF3C7 !important;
+        border: 2px solid #D97706 !important;
+        border-radius: 8px !important;
+    }
     [data-testid="stSidebar"] { background-color: #0F172A !important; color: #F8FAFC !important; }
     [data-testid="stSidebar"] label, [data-testid="stSidebar"] p, [data-testid="stSidebar"] span,
     [data-testid="stSidebar"] div, [data-testid="stSidebar"] h1, [data-testid="stSidebar"] h2, [data-testid="stSidebar"] h3,
@@ -83,6 +99,10 @@ st.markdown(
     }
     .saldo-lbl { font-size: 13px !important; font-weight: 700 !important; color: #1E3A8A !important; display: block; margin-bottom: 4px; }
     .saldo-val { font-size: 22px !important; font-weight: 900 !important; color: #0F172A !important; display: block; }
+    .scan-alert {
+        background: #DCFCE7; border: 2px solid #16A34A; color: #14532D !important;
+        border-radius: 8px; padding: 10px 12px; margin: 8px 0; font-weight: 800; font-size: 14px;
+    }
     .chart-card {
         background: #FFFFFF; border: 1px solid #CBD5E1; border-radius: 10px; padding: 14px; margin-bottom: 14px;
     }
@@ -97,6 +117,12 @@ st.markdown(
     table.tf-table tbody td {
         padding: 7px 10px !important; border: 1px solid #CBD5E1 !important; color: #0F172A !important;
         background-color: #FFFFFF !important; font-size: 13px !important; white-space: nowrap;
+    }
+    @media (max-width: 768px) {
+        .main-title { font-size: 17px !important; padding: 11px 13px; }
+        .card-box { padding: 10px; }
+        .saldo-val { font-size: 18px !important; }
+        table.tf-table thead th, table.tf-table tbody td { padding: 5px 7px !important; font-size: 12px !important; }
     }
 </style>
 """,
@@ -127,6 +153,7 @@ st.session_state.setdefault("cola_etiquetas", [])
 st.session_state.setdefault("cod_label_act", "LBL-EIT-A4")
 st.session_state.setdefault("fuente_gs_url", "")
 st.session_state.setdefault("sku_pend_scan", "")
+st.session_state.setdefault("scan_confirmado_cant", False)
 st.session_state.setdefault("ultimo_disparo_ts", 0.0)
 st.session_state.setdefault("ultimo_disparo_firma", "")
 
@@ -157,12 +184,6 @@ def fmt_miles_comas(val, dec=2):
 
 def fmt_moneda_ec(val, dec=2):
     return f"USD {fmt_miles_comas(val, dec=dec)}"
-
-
-def formatear_ec_numero_str(valor, decimales=2):
-    """Formatea valores numéricos o de texto al estándar Ecuador: 0,00 / 1.000,00."""
-    val = num_es(valor, max_abs=1e14)
-    return fmt_miles_comas(val, dec=decimales)
 
 
 def resolver_ruta(win_path, rel_name):
@@ -710,26 +731,6 @@ def resolver_reverso_pendiente(tx_id, aprobar=True, admin_usr=""):
     return False, None
 
 
-def respaldar_y_limpiar_pruebas():
-    carpeta_respaldo = os.path.join(os.path.dirname(json_path) or BASE_DIR, "Respaldos_Pruebas")
-    try:
-        os.makedirs(carpeta_respaldo, exist_ok=True)
-        stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        for arch in [json_path, enviados_path]:
-            if os.path.exists(arch):
-                destino = os.path.join(carpeta_respaldo, f"{os.path.splitext(os.path.basename(arch))[0]}_{stamp}.json")
-                shutil.copy2(arch, destino)
-        with open(json_path, "w", encoding="utf-8") as f:
-            json.dump([], f, indent=2, ensure_ascii=False)
-        with open(enviados_path, "w", encoding="utf-8") as f:
-            json.dump([], f, indent=2, ensure_ascii=False)
-    except Exception:
-        pass
-    st.session_state["mem_regs"] = []
-    leer_gs.clear()
-    return carpeta_respaldo
-
-
 def ids_enviados():
     if os.path.exists(enviados_path):
         try:
@@ -1141,7 +1142,7 @@ def render_svg_barras_simples(df_plot, label_col, val_col, titulo, color_pos="#1
     )
 
 
-def render_graficos_avance_operativo(df_sku_consol, df_bod_av):
+def render_graficos_avance_operativo(df_bod_av):
     st.markdown("#### Gráficos Ejecutivos Totales (Escalables para 5.000+ SKUs)")
     if df_bod_av is None or df_bod_av.empty:
         return
@@ -1184,7 +1185,7 @@ def render_tabla_segura(df_in, cols, max_filas=50):
         st.caption(f"Mostrando las {max_filas} filas más recientes de {len(df_in)} registros filtrados.")
 
 
-def _inyectar_sku_en_parent(codigo):
+def _inyectar_sku_y_enfocar_cantidad(codigo):
     limpio = norm_mayus_limpio(codigo)
     if not limpio:
         return ""
@@ -1196,15 +1197,23 @@ def _inyectar_sku_en_parent(codigo):
         if (navigator.clipboard && navigator.clipboard.writeText) {{
           navigator.clipboard.writeText(cod).catch(() => {{}});
         }}
-        const inputs = window.parent.document.querySelectorAll('input[type="text"]');
+        const inputs = window.parent.document.querySelectorAll('input[type="text"], input[type="number"]');
+        let cantInput = null;
         for (const inp of inputs) {{
-          if ((inp.getAttribute("aria-label") || "").toUpperCase().includes("COD_SKU")) {{
+          const lbl = (inp.getAttribute("aria-label") || "").toUpperCase();
+          if (lbl.includes("COD_SKU") && inp.type === "text") {{
             const nativeSetter = Object.getOwnPropertyDescriptor(window.parent.HTMLInputElement.prototype, "value").set;
             nativeSetter.call(inp, cod);
             inp.dispatchEvent(new Event("input", {{ bubbles: true }}));
             inp.dispatchEvent(new Event("change", {{ bubbles: true }}));
-            break;
+          }} else if (lbl.includes("CANTIDAD (Q)") || lbl.includes("CANTIDAD")) {{
+            cantInput = inp;
           }}
+        }}
+        if (cantInput) {{
+          cantInput.scrollIntoView({{ behavior: "smooth", block: "center" }});
+          cantInput.focus();
+          cantInput.select();
         }}
       }} catch (e) {{}}
     }})();
@@ -1242,7 +1251,7 @@ def render_lector_codigos_barras(comp_key):
         <button id="btnStopScan_{comp_key}" type="button" style="padding:8px 12px;background:#475569;color:#FFF;border:none;border-radius:6px;font-weight:700;cursor:pointer;">Detener cámara</button>
       </div>
       <video id="vidScan_{comp_key}" playsinline muted style="width:100%;max-height:220px;background:#0F172A;border-radius:6px;display:none;"></video>
-      <div id="resScan_{comp_key}" style="margin-top:6px;font-size:13px;font-weight:700;color:#1E3A8A;">Enfoca el código de barras o usa Foto Evidencia para leerlo.</div>
+      <div id="resScan_{comp_key}" style="margin-top:6px;font-size:13px;font-weight:700;color:#1E3A8A;">Enfoca el código de barras. Al leerlo, ve a Cantidad (Q) antes de pulsar REGISTRAR.</div>
     </div>
     <script src="https://cdn.jsdelivr.net/npm/@zxing/library@0.21.3/umd/index.min.js"></script>
     <script>
@@ -1258,20 +1267,28 @@ def render_lector_codigos_barras(comp_key):
       function aplicarCodigo(codigo) {{
         const limpio = String(codigo || "").trim().toUpperCase();
         if (!limpio) return;
-        statusEl.textContent = "Código detectado: " + limpio;
+        statusEl.textContent = "LEÍDO: " + limpio + " -> Ingresa Cantidad (Q) y luego pulsa REGISTRAR.";
         try {{
           if (navigator.clipboard && navigator.clipboard.writeText) {{
             navigator.clipboard.writeText(limpio).catch(() => {{}});
           }}
-          const inputs = window.parent.document.querySelectorAll('input[type="text"]');
+          const inputs = window.parent.document.querySelectorAll('input[type="text"], input[type="number"]');
+          let cantInput = null;
           for (const inp of inputs) {{
-            if ((inp.getAttribute("aria-label") || "").toUpperCase().includes("COD_SKU")) {{
+            const lbl = (inp.getAttribute("aria-label") || "").toUpperCase();
+            if (lbl.includes("COD_SKU") && inp.type === "text") {{
               const nativeSetter = Object.getOwnPropertyDescriptor(window.parent.HTMLInputElement.prototype, "value").set;
               nativeSetter.call(inp, limpio);
               inp.dispatchEvent(new Event("input", {{ bubbles: true }}));
               inp.dispatchEvent(new Event("change", {{ bubbles: true }}));
-              break;
+            }} else if (lbl.includes("CANTIDAD (Q)") || lbl.includes("CANTIDAD")) {{
+              cantInput = inp;
             }}
+          }}
+          if (cantInput) {{
+            cantInput.scrollIntoView({{ behavior: "smooth", block: "center" }});
+            cantInput.focus();
+            cantInput.select();
           }}
         }} catch(e) {{}}
         detener();
@@ -1532,10 +1549,12 @@ def cargar_nac(p, bytes_subidos=None):
 
 
 # ==============================================================================
-# PANEL IZQUIERDO AGRUPADO EN CARPETAS (TIPO EXPLORADOR) + LÍNEAS DIVISORIAS
+# PANEL IZQUIERDO LIMPIO (SOLO LO OPERATIVO Y NECESARIO)
 # ==============================================================================
 def limpiar_controles_bodega():
     st.session_state["cap_v"] = st.session_state.get("cap_v", 0) + 1
+    st.session_state["sku_pend_scan"] = ""
+    st.session_state["scan_confirmado_cant"] = False
     st.session_state.pop("flt_bod", None)
     st.session_state.pop("flt_ciu", None)
 
@@ -1563,7 +1582,7 @@ st.sidebar.markdown("---")
 if "per_abierto" not in st.session_state:
     st.session_state["per_abierto"] = False
 
-with st.sidebar.expander("2. Control de Periodo, PIN & Enlace Custodios", expanded=es_admin):
+with st.sidebar.expander("2. Periodo, PIN & Enlace Custodios", expanded=es_admin):
     if es_admin:
         st.session_state["per_abierto"] = st.toggle("Habilitar periodo de auditoría (Admin)", value=st.session_state["per_abierto"], key="per_abierto_tgl")
         st.session_state["pin_reverso_act"] = st.text_input("PIN Base Reversos (Admin):", value=st.session_state["pin_reverso_act"], key="pin_rev_admin_in").strip()
@@ -1582,9 +1601,8 @@ with st.sidebar.expander("2. Control de Periodo, PIN & Enlace Custodios", expand
 st.sidebar.markdown("---")
 
 with st.sidebar.expander("3. Filtros de Estadística & Reportes", expanded=False):
-    incluir_gs_rep = st.checkbox("Anexar solo ID_Tx nuevos desde Google Sheets", value=False, key="chk_inc_gs")
-    origen_label = "JSON local + ID_Tx nuevos en GS" if incluir_gs_rep else "JSON local (toma_fisica_registros.json)"
-    st.caption(f"Origen activo: {origen_label}")
+    incluir_gs_rep = st.checkbox("Incluir registros de Google Sheets", value=False, key="chk_inc_gs")
+    origen_label = "Local + Google Sheets" if incluir_gs_rep else "Local"
 
     def resetear_filtros_estadistica():
         st.session_state["flt_per"] = "TODOS"
@@ -1639,13 +1657,6 @@ with st.sidebar.expander("3. Filtros de Estadística & Reportes", expanded=False
         st.session_state["flt_prv"] = "TODOS"
     f_prv = st.selectbox("Proveedor:", provs_disp, key="flt_prv")
 
-    if st.button("Refrescar estadísticas", use_container_width=True, key="btn_ref_stats_bottom"):
-        leer_gs.clear()
-        cargar_pivot.clear()
-        cargar_nac.clear()
-        cargar_fuente_gs_externa.clear()
-        st.rerun()
-
 df_rep = df_base_rep.copy()
 if not df_rep.empty:
     if f_per != "TODOS":
@@ -1669,72 +1680,34 @@ df_sku_rep = consolidar_df_por_sku(df_rep)
 
 st.sidebar.markdown("---")
 
-with st.sidebar.expander("4. Sincronización GS, Excel & Limpieza", expanded=False):
-    if es_admin:
-        if not df_rep.empty:
-            st.download_button(
-                f"Generar Reporte Excel ({len(df_rep)})",
-                data=excel_bytes(df_rep, nac_rows=[], muestreo=muestreo_rep),
-                file_name=f"reporte_toma_fisica_{datetime.now().strftime('%Y%m%d_%H%M%S')}.xlsx",
-                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                use_container_width=True,
-                key="btn_dl_side",
-            )
-        modo_dup_ui = st.radio("Si hay duplicados en Google:", ["Omitir duplicados", "Sobrescribir", "Duplicar"], key="modo_dup_in")
-        modo_dup_map = {"Omitir duplicados": "omitir", "Sobrescribir": "sobreescribir", "Duplicar": "duplicar"}
-        if st.button("Sincronizar JSON a Google", use_container_width=True, key="btn_sync_gs"):
-            pend = cargar_json()
-            if pend:
-                con = {norm_mayus_limpio(x.get("ID_Tx", "")) for x in leer_gs()} | ids_enviados()
-                dups = sum(1 for r in pend if norm_mayus_limpio(r.get("ID_Tx", "")) in con)
-                cnt_ok, cnt_om, cnt_dup, cnt_ov = 0, 0, 0, 0
-                for r in pend:
-                    ok_s, est_s, _ = enviar_gs(r, con, modo_dup=modo_dup_map[modo_dup_ui])
-                    if ok_s:
-                        if est_s == "omitido":
-                            cnt_om += 1
-                        elif est_s == "duplicado":
-                            cnt_dup += 1
-                        elif est_s == "sobreescrito":
-                            cnt_ov += 1
-                        else:
-                            cnt_ok += 1
-                st.success(f"Dups:{dups} | OK:{cnt_ok} | Omit:{cnt_om} | Dup:{cnt_dup} | Sobr:{cnt_ov}")
-            else:
-                st.info("Sin registros locales.")
-
-        st.markdown("---")
-        confirmar_limpieza = st.checkbox("Respaldar y limpiar JSON de pruebas", value=False, key="chk_limp_pruebas")
-        if st.button("Limpiar registros de prueba", use_container_width=True, disabled=not confirmar_limpieza, key="btn_limp_pruebas"):
-            carp = respaldar_y_limpiar_pruebas()
-            st.session_state["cap_v"] += 1
-            st.success(f"Respaldo creado en: {carp}.")
-            st.rerun()
-    else:
-        st.caption("Opciones exclusivas de administrador.")
-
-st.sidebar.markdown("---")
-
-with st.sidebar.expander("5. Conexión Excel / GS & Estado de Archivos", expanded=False):
-    st.caption("Usar solo en Streamlit Cloud/móviles o si deseas cargar catálogos manualmente:")
-    st.session_state["fuente_gs_url"] = st.text_input(
-        "URL CSV/JSON Catálogo o Saldos (GS):",
-        value=st.session_state.get("fuente_gs_url", ""),
-        placeholder="https://docs.google.com/spreadsheets/d/.../export?format=csv",
-        key="fuente_gs_url_in",
-    ).strip()
-    up_pivot = st.file_uploader("Subir PIVOT (.xlsm/.xlsx):", type=["xlsm", "xlsx"], key="up_pivot_in")
-    up_nac = st.file_uploader("Subir NAC / Saldos (.xlsx):", type=["xlsx"], key="up_nac_in")
-    if st.button("Refrescar catálogos y caché", use_container_width=True, key="btn_ref_top"):
+with st.sidebar.expander("4. Sincronizar datos fuente", expanded=True):
+    fecha_nac = fecha_arch(nac_path)
+    fecha_pivot = fecha_arch(pivot_path)
+    st.caption(
+        f"Los teóricos se obtienen de **NAC.xlsx** (`{fecha_nac}`) y **PRODUCTO - PIVOT.xlsm** (`{fecha_pivot}`). "
+        "No requiere ejecutar `.bat` si las fuentes ya están actualizadas o cargadas en Google Sheets."
+    )
+    if st.button("Sincronizar datos fuente", use_container_width=True, key="btn_sync_fuentes"):
         leer_gs.clear()
         cargar_pivot.clear()
         cargar_nac.clear()
         cargar_fuente_gs_externa.clear()
+        st.success("Datos fuente sincronizados.")
         st.rerun()
 
+    if es_admin and not df_rep.empty:
+        st.download_button(
+            f"Exportar Excel ({len(df_rep)})",
+            data=excel_bytes(df_rep, nac_rows=[], muestreo=muestreo_rep),
+            file_name=f"reporte_toma_fisica_{datetime.now().strftime('%Y%m%d_%H%M%S')}.xlsx",
+            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            use_container_width=True,
+            key="btn_dl_side",
+        )
+
 dm_gs, nac_gs = cargar_fuente_gs_externa(st.session_state["fuente_gs_url"])
-dm_loc = cargar_pivot(pivot_path, up_pivot.getvalue() if up_pivot else None)
-nac_loc = cargar_nac(nac_path, up_nac.getvalue() if up_nac else None)
+dm_loc = cargar_pivot(pivot_path, None)
+nac_loc = cargar_nac(nac_path, None)
 
 dict_maestro = dict(dm_gs)
 for k_s, v_d in dm_loc.items():
@@ -1746,20 +1719,13 @@ logs_json = cargar_logs()
 f_script = fecha_arch(RUTA_SCRIPT)
 cap_v = st.session_state["cap_v"]
 
-pend_logs_cnt = sum(1 for lg in logs_json if str(lg.get("Enviado_GS", "NO")).upper() != "SI")
-estado_cat_txt = "GS/Subido" if (nac_gs or up_pivot or up_nac) else ("Local" if os.path.exists(pivot_path) or os.path.exists(nac_path) else "No encontrado")
-st.sidebar.caption(
-    f"Catálogo: {estado_cat_txt} ({fmt_miles_comas(len(dict_maestro), 0)} SKUs) | "
-    f"JSON: {len(regs_json)} | Etiquetas: {len(st.session_state['cola_etiquetas'])} | Logs: {len(logs_json)} ({pend_logs_cnt} pend.)"
-)
-
 # ==============================================================================
 # CABECERA + PESTAÑAS
 # ==============================================================================
 st.markdown('<div class="main-title notranslate" translate="no">Toma Física & Muestreo V7 gPro</div>', unsafe_allow_html=True)
 st.caption(
-    f"Script: `{RUTA_SCRIPT}` | Modificado: `{f_script}` | Periodo: `{'HABILITADO' if st.session_state['per_abierto'] else 'INHABILITADO'}` | "
-    f"Cola etiquetas: `{len(st.session_state['cola_etiquetas'])}`"
+    f"Script: `{RUTA_SCRIPT}` | Modificado: `{f_script}` | NAC: `{fecha_nac}` | PIVOT: `{fecha_pivot}` | "
+    f"Periodo: `{'HABILITADO' if st.session_state['per_abierto'] else 'INHABILITADO'}`"
 )
 
 if st.session_state["errores_ui"]:
@@ -1787,7 +1753,7 @@ with tab_op:
     if not st.session_state["per_abierto"]:
         st.warning("Periodo INHABILITADO: habilítalo desde la carpeta 2 del panel izquierdo cuando corresponda.")
     if not nac_rows and not dict_maestro:
-        st.info("Sin fuente `PIVOT`/`NAC` conectada: configura la URL CSV/JSON en la carpeta 5 del panel izquierdo, o digita `COD_SKU` directo.")
+        st.info("Sin fuente `NAC` / `PIVOT` conectada en este entorno; puedes digitar o escanear `COD_SKU` directo.")
 
     c1, c2, c3 = st.columns(3)
     ciudad = c1.selectbox("Ciudad:", ciudades, key="ciu_in")
@@ -1815,22 +1781,6 @@ with tab_op:
     sel_combo = st.selectbox("Catálogo Teórico:", opts, key=f"cb_{bod_norm}_{cap_v}")
     pre_sku = norm_mayus_limpio(sel_combo.split(" | ")[0]) if sel_combo != "-- SELECCIONE O ESCANEE SKU --" else ""
 
-    if skus_unicos:
-        muestra_opts = ["-- VISTA ESTADOS TEÓRICOS (MUESTRA) --"] + [
-            f"{s_item}  |  {'[AUDITADO]' if s_item in ya_aud else '[PENDIENTE]'}  |  {desc_map.get(s_item, '')[:42]}"
-            for s_item in skus_unicos[:25]
-        ]
-        sel_muestra = st.selectbox(
-            "Vista de estados teóricos (muestra):",
-            muestra_opts,
-            key=f"mues_{bod_norm}_{cap_v}",
-        )
-        if sel_muestra != "-- VISTA ESTADOS TEÓRICOS (MUESTRA) --":
-            sku_m = norm_mayus_limpio(sel_muestra.split("  |  ")[0])
-            if sku_m and not pre_sku:
-                pre_sku = sku_m
-
-    # Estiliza en negrilla las opciones [AUDITADO] dentro de los desplegables nativos
     components.html(
         """
         <script>
@@ -1872,8 +1822,10 @@ with tab_op:
             if img_fuente:
                 sku_detectado_foto = decodificar_sku_desde_imagen_bytes(img_fuente)
                 if sku_detectado_foto:
-                    st.session_state["sku_pend_scan"] = sku_detectado_foto
-                    st.success(f"Código leído en foto: `{sku_detectado_foto}`")
+                    if st.session_state.get("sku_pend_scan") != sku_detectado_foto:
+                        st.session_state["sku_pend_scan"] = sku_detectado_foto
+                        st.session_state["scan_confirmado_cant"] = False
+                    st.success(f"Código leído en foto: `{sku_detectado_foto}` — ingresa la cantidad antes de REGISTRAR.")
                 else:
                     st.caption("Foto guardada. Si el código no se leyó automáticamente, escríbelo o pégalo en `COD_SKU`.")
 
@@ -1883,10 +1835,22 @@ with tab_op:
     c4, c5, c6 = st.columns([2.5, 1.5, 1])
     sku_raw = c4.text_input("COD_SKU (MAYÚSCULAS):", value=pre_sku, key=f"sku_{bod_norm}_{cap_v}")
     cod_sku = norm_mayus_limpio(sku_raw)
-    if sku_detectado_foto:
-        _inyectar_sku_en_parent(sku_detectado_foto)
 
-    cant = c5.number_input("Cantidad (Q):", step=1, value=1, key=f"q_{bod_norm}_{cap_v}")
+    if cod_sku and st.session_state.get("sku_pend_scan") == cod_sku and not st.session_state.get("scan_confirmado_cant"):
+        st.markdown(
+            f'<div class="scan-alert notranslate" translate="no">Código capturado: {html.escape(cod_sku)} — Ahora digita o ajusta la <u>Cantidad (Q)</u> antes de pulsar REGISTRAR.</div>',
+            unsafe_allow_html=True,
+        )
+
+    if sku_detectado_foto:
+        _inyectar_sku_y_enfocar_cantidad(sku_detectado_foto)
+
+    # Si viene de escaneo, parte en 0 para obligar a anotar cantidad conscientemente
+    valor_inicial_q = 0 if (cod_sku and st.session_state.get("sku_pend_scan") == cod_sku) else 1
+    cant = c5.number_input("Cantidad (Q):", step=1, value=valor_inicial_q, key=f"q_{bod_norm}_{cap_v}")
+    if cant != 0 and cod_sku and st.session_state.get("sku_pend_scan") == cod_sku:
+        st.session_state["scan_confirmado_cant"] = True
+
     motivo = ""
     pin_ingresado = ""
     pin_valido_cust = False
@@ -1909,7 +1873,8 @@ with tab_op:
     c6.write("")
     ok_rev = (cant >= 0) or bool(motivo)
     ubic_valida = bool(ubic) and ubic not in ["UBICACIÓN", "UBICACION", "ESPECIFIQUE"]
-    puede = st.session_state["per_abierto"] and ubic_valida and bool(cod_sku) and (cant != 0) and ok_rev
+    es_scan_sin_cant = bool(cod_sku and st.session_state.get("sku_pend_scan") == cod_sku and cant == 0)
+    puede = st.session_state["per_abierto"] and ubic_valida and bool(cod_sku) and (cant != 0) and ok_rev and not es_scan_sin_cant
     btn_reg = c6.button("REGISTRAR", use_container_width=True, disabled=not puede, key="btn_reg_tx")
 
     e_col1, e_col2, e_col3 = st.columns([2.2, 1.0, 1.8])
@@ -1929,7 +1894,7 @@ with tab_op:
     if not cod_sku:
         faltan.append("COD_SKU")
     if cant == 0:
-        faltan.append("Cantidad (Q) distinta de 0")
+        faltan.append("Anotar Cantidad (Q) distinta de 0")
     if not ok_rev:
         faltan.append("Motivo Reverso")
     if faltan:
@@ -2092,6 +2057,7 @@ with tab_op:
                 ok_g, est_g, tx_g = enviar_gs(nuevo)
                 st.session_state["cap_v"] += 1
                 st.session_state["sku_pend_scan"] = ""
+                st.session_state["scan_confirmado_cant"] = False
                 if est_rev_ini == "PENDIENTE_APROBACION":
                     st.success(f"Reverso registrado en cola de aprobación ({cod_sku}, Q {fmt_miles_comas(cant, 0)}) -> PENDIENTE_REVERSO | GS: {est_g} ({tx_g})" if ok_g else f"Reverso guardado en cola local | GS: {est_g}")
                 else:
@@ -2166,7 +2132,7 @@ with tab_dash:
         )
         df_bod_av = construir_resumen_bodega(df_rep, nac_rows, muestreo=muestreo_rep, bodega_filtro=f_bod)
         st.divider()
-        render_graficos_avance_operativo(df_sku_rep, df_bod_av)
+        render_graficos_avance_operativo(df_bod_av)
         st.divider()
 
         df_cus_g = (
