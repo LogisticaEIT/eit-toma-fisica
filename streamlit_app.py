@@ -103,6 +103,10 @@ st.markdown(
         background: #DCFCE7; border: 2px solid #16A34A; color: #14532D !important;
         border-radius: 8px; padding: 10px 12px; margin: 8px 0; font-weight: 800; font-size: 14px;
     }
+    .last-tx-banner {
+        background: #F0FDF4; border: 1px solid #86EFAC; border-left: 5px solid #16A34A;
+        border-radius: 8px; padding: 10px 14px; margin-bottom: 10px; font-size: 13.5px; color: #0F172A !important;
+    }
     .chart-card {
         background: #FFFFFF; border: 1px solid #CBD5E1; border-radius: 10px; padding: 14px; margin-bottom: 14px;
     }
@@ -156,6 +160,8 @@ st.session_state.setdefault("sku_pend_scan", "")
 st.session_state.setdefault("scan_confirmado_cant", False)
 st.session_state.setdefault("ultimo_disparo_ts", 0.0)
 st.session_state.setdefault("ultimo_disparo_firma", "")
+st.session_state.setdefault("ultimo_tx_resumen", "")
+st.session_state.setdefault("tx_reverso_draft", "")
 
 
 def norm_mayus_limpio(v):
@@ -262,7 +268,7 @@ _CODE128_PATTERNS = [
 ]
 
 
-def generar_svg_code128(texto, alto_px=34):
+def generar_svg_code128(texto, alto_px=44):
     txt = "".join(ch for ch in norm_mayus_limpio(texto) if 32 <= ord(ch) <= 126)
     if not txt:
         txt = "000000"
@@ -281,9 +287,10 @@ def generar_svg_code128(texto, alto_px=34):
         for idx, dig in enumerate(pat):
             modulos.append((idx % 2 == 0, int(dig)))
 
-    total_w = sum(w for _, w in modulos) + 24
-    rects = []
-    x = 12
+    quiet_px = 18
+    total_w = sum(w for _, w in modulos) + (quiet_px * 2)
+    rects = [f'<rect x="0" y="0" width="{total_w}" height="{alto_px}" fill="#FFFFFF"/>']
+    x = quiet_px
     for es_barra, ancho in modulos:
         if es_barra:
             rects.append(f'<rect x="{x}" y="0" width="{ancho}" height="{alto_px}" fill="#000000"/>')
@@ -291,7 +298,7 @@ def generar_svg_code128(texto, alto_px=34):
 
     return (
         f'<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 {total_w} {alto_px}" '
-        f'preserveAspectRatio="none" style="width:92%;height:10mm;display:block;margin:0 auto;">'
+        f'preserveAspectRatio="xMidYMid meet" style="width:auto;max-width:96%;height:12.5mm;display:block;margin:0 auto;background:#FFFFFF;">'
         + "".join(rects)
         + "</svg>"
     )
@@ -327,44 +334,45 @@ def render_hoja_a4_etiquetas(cola, cod_label="LBL-EIT-A4", ancho_mm=58, alto_mm=
         celdas = []
         for it in sub:
             s_sku = norm_mayus_limpio(it.get("COD_SKU", ""))
-            s_desc = html.escape(norm_mayus_limpio(it.get("DESCRIPCION", ""))[:38])
+            s_desc = html.escape(norm_mayus_limpio(it.get("DESCRIPCION", ""))[:40])
             s_bod = html.escape(norm_bod(it.get("BODEGA", "")))
-            svg_bar = generar_svg_code128(s_sku, alto_px=34)
+            svg_bar = generar_svg_code128(s_sku, alto_px=44)
             celdas.append(
                 f'<div class="notranslate" translate="no" style="position:relative;width:{ancho_mm}mm;height:{alto_mm}mm;'
-                f'border:1px dashed #64748B;box-sizing:border-box;padding:1.2mm 2mm;display:flex;flex-direction:column;'
-                f'justify-content:center;align-items:center;text-align:center;background:#FFFFFF;overflow:hidden;gap:0.6mm;">'
-                f'<div style="width:100%;font-size:6.2pt;font-weight:700;color:#0F172A;line-height:1.05;'
+                f'border:1px dashed #64748B;box-sizing:border-box;padding:0.8mm 1.5mm;display:flex;flex-direction:column;'
+                f'justify-content:space-between;align-items:center;text-align:center;background:#FFFFFF;overflow:hidden;">'
+                f'<div style="width:100%;font-size:5.8pt;font-weight:700;color:#0F172A;line-height:1.0;'
                 f'white-space:nowrap;overflow:hidden;text-overflow:ellipsis;text-align:center;">{s_desc}</div>'
-                f'<div style="width:100%;display:flex;justify-content:center;align-items:center;">{svg_bar}</div>'
+                f'<div style="width:100%;display:flex;justify-content:center;align-items:center;background:#FFFFFF;">{svg_bar}</div>'
                 f'<div style="position:relative;width:100%;display:flex;justify-content:center;align-items:center;">'
-                f'<span style="position:absolute;left:0;bottom:0;font-size:8.2pt;font-weight:900;color:#000000;line-height:1.0;">{s_bod}</span>'
-                f'<span style="font-size:9.2pt;font-weight:900;letter-spacing:0.8px;color:#000000;'
-                f'line-height:1.05;text-align:center;font-family:Arial,Helvetica,sans-serif;">{html.escape(s_sku)}</span>'
+                f'<span style="position:absolute;left:0;bottom:0;font-size:7.8pt;font-weight:900;color:#000000;line-height:1.0;">{s_bod}</span>'
+                f'<span style="font-size:8.8pt;font-weight:900;letter-spacing:0.6px;color:#000000;'
+                f'line-height:1.0;text-align:center;font-family:Arial,Helvetica,sans-serif;">{html.escape(s_sku)}</span>'
                 f'</div>'
                 f'</div>'
             )
         bloques_html.append(
-            f'<div class="hoja-a4 notranslate" translate="no" style="width:210mm;min-height:297mm;padding:10mm 11mm;box-sizing:border-box;'
-            f'background:#FFFFFF;border:1px solid #94A3B8;margin:0 auto 14px auto;display:grid;'
-            f'grid-template-columns:repeat(3, {ancho_mm}mm);grid-auto-rows:{alto_mm}mm;gap:2mm 3mm;align-content:start;">'
+            f'<div class="hoja-a4 notranslate" translate="no" style="width:210mm;min-height:297mm;padding:4.5mm 5.5mm;box-sizing:border-box;'
+            f'background:#FFFFFF;border:1px dashed #94A3B8;margin:0 auto 10px auto;display:grid;'
+            f'grid-template-columns:repeat(3, {ancho_mm}mm);grid-auto-rows:{alto_mm}mm;gap:1.2mm 2mm;align-content:start;">'
             + "".join(celdas)
             + '</div>'
         )
 
     html_doc = f"""
     <div class="notranslate" translate="no">
-      <div style="margin-bottom:10px;display:flex;gap:10px;align-items:center;flex-wrap:wrap;">
+      <div style="margin-bottom:8px;display:flex;gap:10px;align-items:center;flex-wrap:wrap;">
         <button onclick="window.print()" type="button" style="padding:8px 14px;background:#0F172A;color:#FFFFFF;border:none;border-radius:6px;font-weight:700;cursor:pointer;">
           Imprimir Hoja A4 ({len(cola)} etiquetas / {total_hojas} hoja(s))
         </button>
-        <span style="font-size:12px;color:#334155;font-weight:700;">A4 • {ancho_mm}×{alto_mm} mm • DESCRIPCIÓN / CODE128 / COD_SKU centrado • Bodega en negrita</span>
+        <span style="font-size:12px;color:#334155;font-weight:700;">A4 márgenes reducidos • {ancho_mm}×{alto_mm} mm con línea punteada • CODE128 con zona quieta</span>
       </div>
       <style>
+        @page {{ size: A4 portrait; margin: 4mm; }}
         @media print {{
           body * {{ visibility: hidden; }}
           .hoja-a4, .hoja-a4 * {{ visibility: visible; }}
-          .hoja-a4 {{ position: relative; border: none !important; margin: 0 !important; page-break-after: always; }}
+          .hoja-a4 {{ position: relative; width: 100% !important; min-height: auto !important; padding: 0 !important; border: none !important; margin: 0 !important; page-break-after: always; }}
           button {{ display: none !important; }}
         }}
       </style>
@@ -1559,6 +1567,7 @@ def limpiar_controles_bodega():
     st.session_state["cap_v"] = st.session_state.get("cap_v", 0) + 1
     st.session_state["sku_pend_scan"] = ""
     st.session_state["scan_confirmado_cant"] = False
+    st.session_state["tx_reverso_draft"] = ""
     st.session_state.pop("flt_bod", None)
     st.session_state.pop("flt_ciu", None)
 
@@ -1696,7 +1705,6 @@ with st.sidebar.expander("4. Sincronizar datos fuente", expanded=True):
         cargar_pivot.clear()
         cargar_nac.clear()
         cargar_fuente_gs_externa.clear()
-        st.success("Datos fuente sincronizados.")
         st.rerun()
 
     if es_admin and not df_rep.empty:
@@ -1849,8 +1857,10 @@ with tab_op:
     if sku_detectado_foto:
         _inyectar_sku_y_enfocar_cantidad(sku_detectado_foto)
 
+    q_key = f"q_{bod_norm}_{cap_v}"
     valor_inicial_q = 0 if (cod_sku and st.session_state.get("sku_pend_scan") == cod_sku) else 1
-    cant = c5.number_input("Cantidad (Q):", step=1, value=valor_inicial_q, key=f"q_{bod_norm}_{cap_v}")
+    cant = c5.number_input("Cantidad (Q):", step=1, value=valor_inicial_q, key=q_key)
+    cant_modificada = (float(cant) != float(valor_inicial_q)) or (q_key in st.session_state and float(st.session_state[q_key]) != float(valor_inicial_q))
     if cant != 0 and cod_sku and st.session_state.get("sku_pend_scan") == cod_sku:
         st.session_state["scan_confirmado_cant"] = True
 
@@ -1861,7 +1871,9 @@ with tab_op:
     pin_tx_esperado = ""
 
     if cant < 0:
-        tx_borrador_pin = f"TX-{datetime.now().strftime('%Y%m%d%H%M%S')}"
+        if not st.session_state.get("tx_reverso_draft"):
+            st.session_state["tx_reverso_draft"] = f"TX-{datetime.now().strftime('%Y%m%d%H%M%S')}"
+        tx_borrador_pin = st.session_state["tx_reverso_draft"]
         pin_tx_esperado = generar_pin_transaccion(
             st.session_state["pin_reverso_act"],
             tx_id=tx_borrador_pin,
@@ -1881,7 +1893,9 @@ with tab_op:
             else:
                 st.info(f"Sin PIN ingresado para `{tx_borrador_pin}`: el reverso queda **PENDIENTE_APROBACION** en la bandeja del administrador.")
         else:
-            st.caption(f"PIN único generado para esta transacción (`{tx_borrador_pin}`): **`{pin_tx_esperado}`**")
+            st.caption(f"PIN único para esta transacción (`{tx_borrador_pin}`): **`{pin_tx_esperado}`**")
+    else:
+        st.session_state["tx_reverso_draft"] = ""
 
     c6.write("")
     c6.write("")
@@ -1897,7 +1911,9 @@ with tab_op:
     if e_col3.button("Añadir SKU a cola etiqueta", use_container_width=True, disabled=not bool(cod_sku), key="btn_add_etq_rapido"):
         d_etq = dict_maestro.get(cod_sku, {}).get("DESCRIPCIÓN") or dict_maestro.get(cod_sku, {}).get("DESCRIPCION") or desc_map.get(cod_sku, "")
         agregar_etiqueta_cola(cod_sku, d_etq, bod_norm, ubic, usuario_lbl=usuario, copias=copias_etq)
-        st.success(f"Añadido {cod_sku} ({copias_etq} copia(s)) a la cola de etiquetas.")
+        st.session_state["ultimo_tx_resumen"] = (
+            f"<b>Cola de etiquetas actualizada:</b> {html.escape(cod_sku)} ({int(copias_etq)} copia(s)) agregado para impresión A4."
+        )
         st.rerun()
 
     faltan = []
@@ -1952,21 +1968,35 @@ with tab_op:
             and norm_mayus_limpio(r.get("COD_SKU", "")) == cod_sku
             and es_computable_en_consolidado(r)
         )
-        aplica_rev_ya = (cant >= 0) or es_admin or pin_valido_cust
-        aporte_proy = float(cant) if aplica_rev_ya else 0.0
-        q_acum_calc = round(float(prev_comp) + aporte_proy, 4)
-        dif_proy = round(q_acum_calc - float(st_teo), 4)
-        nota_proy = " (Reverso pendiente de aprobación)" if (cant < 0 and not aplica_rev_ya) else ""
+        dif_actual_sin_q = round(float(prev_comp) - float(st_teo), 4)
+        linea_1 = (
+            f"<b>COD_SKU:</b> {html.escape(cod_sku)} &nbsp;|&nbsp; "
+            f"<b>Desc:</b> {html.escape(flex_exacto('DESCRIPCIÓN', 'DESCRIPCION', 'DESC'))} &nbsp;|&nbsp; "
+            f"<b>Und:</b> {html.escape(flex_exacto('UNIDAD', 'UND'))} &nbsp;|&nbsp; "
+            f"<b>Cód. Proveedor:</b> <code>{html.escape(prov_cod)}</code> &nbsp;|&nbsp; "
+            f"<b>Costo Unit:</b> {fmt_moneda_ec(c_unit_vista, 4)}"
+        )
+        if cant_modificada:
+            aplica_rev_ya = (cant >= 0) or es_admin or pin_valido_cust
+            aporte_proy = float(cant) if aplica_rev_ya else 0.0
+            q_acum_calc = round(float(prev_comp) + aporte_proy, 4)
+            dif_proy = round(q_acum_calc - float(st_teo), 4)
+            nota_proy = " (Reverso pendiente de aprobación)" if (cant < 0 and not aplica_rev_ya) else ""
+            linea_2 = (
+                f"<b>Acum. Anterior:</b> {fmt_miles_comas(prev_comp, 2)} &nbsp;|&nbsp; "
+                f"<b>Dif. Actual:</b> {fmt_miles_comas(dif_actual_sin_q, 2)} &nbsp;|&nbsp; "
+                f"<b>Proyectado Q:</b> {fmt_miles_comas(q_acum_calc, 2)} &nbsp;|&nbsp; "
+                f"<b>Dif. Proy:</b> {fmt_miles_comas(dif_proy, 2)}{html.escape(nota_proy)}"
+            )
+        else:
+            linea_2 = (
+                f"<b>Acum. Anterior:</b> {fmt_miles_comas(prev_comp, 2)} &nbsp;|&nbsp; "
+                f"<b>Dif. Actual:</b> {fmt_miles_comas(dif_actual_sin_q, 2)} &nbsp;|&nbsp; "
+                f"<span style='color:#475569;'><i>Proyección oculta hasta ajustar Cantidad (Q)</i></span>"
+            )
         st.markdown(
-            f'<div class="notranslate" translate="no" style="background:#EFF6FF;border:1px solid #93C5FD;border-radius:8px;padding:10px 14px;margin-bottom:10px;font-size:14px;">'
-            f'<b>COD_SKU:</b> {html.escape(cod_sku)} &nbsp;|&nbsp; '
-            f'<b>Desc:</b> {html.escape(flex_exacto("DESCRIPCIÓN", "DESCRIPCION", "DESC"))} &nbsp;|&nbsp; '
-            f'<b>Und:</b> {html.escape(flex_exacto("UNIDAD", "UND"))} &nbsp;|&nbsp; '
-            f'<b>Cód. Proveedor:</b> <code>{html.escape(prov_cod)}</code> &nbsp;|&nbsp; '
-            f'<b>Costo Unit:</b> {fmt_moneda_ec(c_unit_vista, 4)} &nbsp;|&nbsp; '
-            f'<b>Acum. Anterior:</b> {fmt_miles_comas(prev_comp, 2)} &nbsp;|&nbsp; '
-            f'<b>Proyectado Q:</b> {fmt_miles_comas(q_acum_calc, 2)} &nbsp;|&nbsp; '
-            f'<b>Dif. Proy:</b> {fmt_miles_comas(dif_proy, 2)}{html.escape(nota_proy)}'
+            f'<div class="notranslate" translate="no" style="background:#EFF6FF;border:1px solid #93C5FD;border-radius:8px;padding:10px 14px;margin-bottom:10px;font-size:14px;line-height:1.5;">'
+            f'{linea_1}<br>{linea_2}'
             f'</div>',
             unsafe_allow_html=True,
         )
@@ -2021,7 +2051,7 @@ with tab_op:
                 and es_computable_en_consolidado(r)
             )
             now = datetime.now()
-            tx_id_nuevo = f"TX-{now.strftime('%Y%m%d%H%M%S')}"
+            tx_id_nuevo = st.session_state.get("tx_reverso_draft") or f"TX-{now.strftime('%Y%m%d%H%M%S')}"
             pin_tx_actual = generar_pin_transaccion(
                 st.session_state["pin_reverso_act"],
                 tx_id=tx_id_nuevo,
@@ -2080,13 +2110,28 @@ with tab_op:
                 st.session_state["cap_v"] += 1
                 st.session_state["sku_pend_scan"] = ""
                 st.session_state["scan_confirmado_cant"] = False
+                st.session_state["tx_reverso_draft"] = ""
                 if est_rev_ini == "PENDIENTE_APROBACION":
-                    st.success(f"Reverso {tx_id_nuevo} en cola de aprobación ({cod_sku}, Q {fmt_miles_comas(cant, 0)}) -> PENDIENTE_REVERSO | GS: {est_g} ({tx_g})" if ok_g else f"Reverso guardado en cola local | GS: {est_g}")
+                    st.session_state["ultimo_tx_resumen"] = (
+                        f"<b>Último registro guardado:</b> <code>{html.escape(tx_id_nuevo)}</code> | "
+                        f"<b>SKU:</b> {html.escape(cod_sku)} | <b>Q:</b> {fmt_miles_comas(cant, 0)} | "
+                        f"<b>Estado:</b> PENDIENTE_REVERSO | <b>GS:</b> {html.escape(est_g)} ({html.escape(tx_g)})"
+                    )
                 else:
-                    st.success(f"Guardado {tx_id_nuevo} | {cod_sku} ({fmt_miles_comas(cant, 0)} | Acum {fmt_miles_comas(q_acum_final, 2)}) -> {est_f} (Dif {fmt_miles_comas(dif_f, 2)} | Costo U {fmt_moneda_ec(c_unit_limpio, 4)}) | GS: {est_g} ({tx_g})" if ok_g else f"Guardado local OK | GS: {est_g}")
+                    st.session_state["ultimo_tx_resumen"] = (
+                        f"<b>Último registro guardado:</b> <code>{html.escape(tx_id_nuevo)}</code> | "
+                        f"<b>SKU:</b> {html.escape(cod_sku)} | <b>Q:</b> {fmt_miles_comas(cant, 0)} | "
+                        f"<b>Acum:</b> {fmt_miles_comas(q_acum_final, 2)} | <b>Dif:</b> {fmt_miles_comas(dif_f, 2)} | "
+                        f"<b>Estado:</b> {html.escape(est_f)} | <b>GS:</b> {html.escape(est_g)} ({html.escape(tx_g)})"
+                    )
                 st.rerun()
 
     st.markdown("---")
+    if st.session_state.get("ultimo_tx_resumen"):
+        st.markdown(
+            f'<div class="last-tx-banner notranslate" translate="no">{st.session_state["ultimo_tx_resumen"]}</div>',
+            unsafe_allow_html=True,
+        )
     st.markdown("### Últimos Registros")
     prev_df = prep_df(datos_combinados(incluir_gs=False))
     render_tabla_segura(prev_df.iloc[::-1], ["Timestamp", "Bodega", "Ubicacion", "PROVEEDOR", "COD_SKU", "Q", "QSA_Teorico", "DIFERENCIA", "ESTADO", "Estado_Reverso", "COSTO UNITARIO", "COSTO DIF"], max_filas=6)
@@ -2130,13 +2175,13 @@ with tab_dash:
                 ok_r, reg_mod = resolver_reverso_pendiente(sel_tx_rev, aprobar=True, admin_usr=usuario)
                 if ok_r and reg_mod is not None:
                     enviar_gs(reg_mod, modo_dup="sobreescribir")
-                    st.success(f"Reverso {sel_tx_rev} aprobado y consolidado aplicado.")
+                    st.session_state["ultimo_tx_resumen"] = f"<b>Reverso aprobado:</b> <code>{html.escape(sel_tx_rev)}</code> y consolidado aplicado."
                     st.rerun()
             if r_col2.button("Rechazar Reverso", use_container_width=True, key="btn_rechazar_rev"):
                 ok_r, reg_mod = resolver_reverso_pendiente(sel_tx_rev, aprobar=False, admin_usr=usuario)
                 if ok_r and reg_mod is not None:
                     enviar_gs(reg_mod, modo_dup="sobreescribir")
-                    st.info(f"Reverso {sel_tx_rev} rechazado; no altera el consolidado oficial.")
+                    st.session_state["ultimo_tx_resumen"] = f"<b>Reverso rechazado:</b> <code>{html.escape(sel_tx_rev)}</code>; no altera el consolidado oficial."
                     st.rerun()
         st.divider()
 
@@ -2206,7 +2251,7 @@ with tab_dash:
 
 with tab_etq:
     st.markdown("### Cola de Etiquetas (~5,8 × 2,5 cm) & Armado de Hoja A4")
-    st.caption("Diseño centrado: `DESCRIPCIÓN` arriba + código de barras `CODE 128` al centro + `COD_SKU` abajo + bodega en negrita inferior izquierda.")
+    st.caption("Diseño centrado: `DESCRIPCIÓN` arriba + código de barras `CODE 128` al centro + `COD_SKU` abajo + bodega en negrita inferior izquierda + borde punteado para recorte.")
     ec1, ec2, ec3, ec4 = st.columns([2.2, 1.0, 1.0, 1.4])
     sku_etq_man = norm_mayus_limpio(ec1.text_input("Agregar COD_SKU a cola:", key="sku_etq_man_in"))
     cop_etq_man = ec2.number_input("Copias:", min_value=1, max_value=33, value=1, step=1, key="cop_etq_man_in")
@@ -2259,14 +2304,14 @@ with tab_exp:
         if pend_logs:
             ok_cnt_l, tot_cnt_l = enviar_logs_a_gs(pend_logs)
             guardar_logs_lista(logs_act)
-            st.success(f"Enviados a {PESTANA_LOGS_GS}: {ok_cnt_l}/{tot_cnt_l} registros.")
+            st.session_state["ultimo_tx_resumen"] = f"<b>Logs enviados a {html.escape(PESTANA_LOGS_GS)}:</b> {ok_cnt_l}/{tot_cnt_l} registros."
             st.rerun()
         else:
             st.info(f"No hay logs pendientes por enviar a {PESTANA_LOGS_GS}.")
     if lcol2.button("Limpiar LOGS locales", use_container_width=True, key="btn_clear_logs"):
         if logs_act:
             guardar_logs_lista([])
-            st.success("Historial de LOGS locales limpiado.")
+            st.session_state["ultimo_tx_resumen"] = "<b>Historial de LOGS locales limpiado.</b>"
             st.rerun()
         else:
             st.info("No hay logs locales para limpiar.")
