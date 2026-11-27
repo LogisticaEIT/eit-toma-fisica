@@ -14,7 +14,7 @@ import csv
 import time
 import math
 import html
-import hashlib
+import random
 import urllib.parse
 import urllib3
 from datetime import date, datetime
@@ -197,12 +197,22 @@ st.session_state.setdefault("scan_confirmado_cant", False)
 st.session_state.setdefault("ultimo_disparo_ts", 0.0)
 st.session_state.setdefault("ultimo_disparo_firma", "")
 st.session_state.setdefault("ultimo_tx_resumen", "")
-st.session_state.setdefault("tx_reverso_draft", "")
 st.session_state.setdefault("ultima_q_valida", 1)
 
 
 def norm_mayus_limpio(v):
     return " ".join(str(v or "").strip().upper().split())
+
+
+def normalizar_pin_4d(pin_val, defecto="7031"):
+    digs = "".join(ch for ch in str(pin_val or "") if ch.isdigit())
+    if not digs:
+        digs = "".join(ch for ch in str(defecto or "7031") if ch.isdigit()) or "7031"
+    return digs[:4].zfill(4)
+
+
+def generar_pin_aleatorio_4d():
+    return f"{random.randint(0, 9999):04d}"
 
 
 def fmt_miles_comas(val, dec=2):
@@ -419,16 +429,6 @@ def render_hoja_a4_etiquetas(cola, cod_label="LBL-EIT-A4", ancho_mm=58, alto_mm=
     components.html(html_doc, height=540, scrolling=True)
 
 
-def generar_pin_transaccion(pin_base="7031", tx_id="", bod="", cod_sku="", q_val=0):
-    tx_n = norm_mayus_limpio(tx_id)
-    bod_n = norm_bod(bod)
-    sku_n = norm_mayus_limpio(cod_sku)
-    q_n = float(q_val or 0.0)
-    raw = f"{str(pin_base).strip()}|TX|{tx_n}|{bod_n}|{sku_n}|{q_n}".encode("utf-8")
-    dig = int(hashlib.sha256(raw).hexdigest()[:8], 16) % 10000
-    return f"{dig:04d}"
-
-
 def cargar_logs():
     if os.path.exists(logs_path):
         try:
@@ -442,12 +442,35 @@ def cargar_logs():
 
 def guardar_logs_lista(lista_logs):
     try:
-        os.makedirs(os.path.dirname(logs_path), exist_ok=True)
+        carpeta_logs = os.path.dirname(logs_path)
+        if carpeta_logs:
+            os.makedirs(carpeta_logs, exist_ok=True)
         with open(logs_path, "w", encoding="utf-8") as f:
             json.dump(lista_logs[-500:], f, indent=2, ensure_ascii=False)
         return True
     except Exception:
         return False
+
+
+def resetear_memoria_y_json_cero():
+    st.session_state["mem_regs"] = []
+    st.session_state["ultimo_tx_resumen"] = ""
+    st.session_state["ultimo_disparo_firma"] = ""
+    st.session_state["ultimo_disparo_ts"] = 0.0
+    st.session_state["errores_ui"] = []
+    for ruta_j in [json_path, enviados_path, logs_path]:
+        try:
+            carp_j = os.path.dirname(ruta_j)
+            if carp_j:
+                os.makedirs(carp_j, exist_ok=True)
+            with open(ruta_j, "w", encoding="utf-8") as f:
+                json.dump([], f, indent=2, ensure_ascii=False)
+        except Exception:
+            pass
+    try:
+        leer_gs.clear()
+    except Exception:
+        pass
 
 
 def registrar_log(detalle, origen="APP", usuario=""):
@@ -1704,7 +1727,6 @@ def limpiar_controles_bodega():
     st.session_state["cap_v"] = st.session_state.get("cap_v", 0) + 1
     st.session_state["sku_pend_scan"] = ""
     st.session_state["scan_confirmado_cant"] = False
-    st.session_state["tx_reverso_draft"] = ""
     st.session_state.pop("flt_bod", None)
     st.session_state.pop("flt_ciu", None)
 
@@ -1735,7 +1757,15 @@ if "per_abierto" not in st.session_state:
 if es_admin:
     with st.sidebar.expander("2. Periodo, PIN & Enlace Custodios", expanded=True):
         st.session_state["per_abierto"] = st.toggle("Habilitar periodo de auditoría (Admin)", value=st.session_state["per_abierto"], key="per_abierto_tgl")
-        st.session_state["pin_reverso_act"] = st.text_input("PIN Base Reversos (Admin):", value=st.session_state["pin_reverso_act"], key="pin_rev_admin_in").strip()
+
+        st.session_state["pin_reverso_act"] = normalizar_pin_4d(st.session_state.get("pin_reverso_act", "7031"))
+        p_col1, p_col2 = st.columns([1.6, 1.4])
+        pin_edit = p_col1.text_input("PIN Reversos (4 dígitos):", value=st.session_state["pin_reverso_act"], max_chars=4, key="pin_rev_admin_in")
+        st.session_state["pin_reverso_act"] = normalizar_pin_4d(pin_edit, defecto=st.session_state["pin_reverso_act"])
+        p_col2.write("")
+        if p_col2.button("Nuevo PIN", use_container_width=True, key="btn_nuevo_pin_4d"):
+            st.session_state["pin_reverso_act"] = generar_pin_aleatorio_4d()
+            st.rerun()
 
         url_wa_raw = st.text_input("URL Custodios:", value="https://eit-toma-fisica-4wrzxgv3pgzfdr8agv9mtm.streamlit.app/", key="url_wa_in")
         url_wa_limpia = "".join(str(url_wa_raw or "").split()).strip()
@@ -1844,7 +1874,7 @@ fecha_nac = fecha_arch(nac_path)
 fecha_pivot = fecha_arch(pivot_path)
 
 if es_admin:
-    with st.sidebar.expander("4. Sincronizar datos fuente", expanded=True):
+    with st.sidebar.expander("4. Sincronizar & Memoria", expanded=True):
         st.session_state["fuente_gs_url"] = st.text_input(
             "URL Catálogo / NAC (CSV/JSON):",
             value=st.session_state.get("fuente_gs_url", ""),
@@ -1860,6 +1890,10 @@ if es_admin:
             cargar_pivot.clear()
             cargar_nac.clear()
             cargar_fuente_gs_externa.clear()
+            st.rerun()
+
+        if st.button("Dejar memoria y JSON en 0", use_container_width=True, key="btn_reset_cero_admin"):
+            resetear_memoria_y_json_cero()
             st.rerun()
 
         if not df_rep.empty:
@@ -2055,35 +2089,22 @@ with tab_op:
     motivo = ""
     pin_ingresado = ""
     pin_valido_cust = False
-    tx_borrador_pin = ""
-    pin_tx_esperado = ""
+    pin_autorizacion_act = normalizar_pin_4d(st.session_state.get("pin_reverso_act", "7031"))
 
     if q_efectiva < 0:
-        if not st.session_state.get("tx_reverso_draft"):
-            st.session_state["tx_reverso_draft"] = f"TX-{datetime.now().strftime('%Y%m%d%H%M%S')}"
-        tx_borrador_pin = st.session_state["tx_reverso_draft"]
-        pin_tx_esperado = generar_pin_transaccion(
-            st.session_state["pin_reverso_act"],
-            tx_id=tx_borrador_pin,
-            bod=bod_norm,
-            cod_sku=cod_sku,
-            q_val=q_efectiva,
-        )
         r_m1, r_m2 = st.columns([2.2, 1.3])
         motivo = norm_mayus_limpio(r_m1.text_input("Motivo Reverso (Col K obligatorio si Q < 0):", key=f"mot_{bod_norm}_{cap_v}"))
         if not es_admin:
-            pin_ingresado = r_m2.text_input(f"PIN único Tx ({tx_borrador_pin}):", max_chars=6, key=f"pin_{bod_norm}_{cap_v}").strip()
-            pin_valido_cust = bool(pin_ingresado) and (pin_ingresado == pin_tx_esperado)
+            pin_ingresado = r_m2.text_input("PIN Autorización (4 dígitos):", max_chars=4, key=f"pin_{bod_norm}_{cap_v}").strip()
+            pin_valido_cust = bool(pin_ingresado) and (normalizar_pin_4d(pin_ingresado, defecto="") == pin_autorizacion_act and len(pin_ingresado) == 4)
             if pin_ingresado and not pin_valido_cust:
-                st.warning(f"PIN incorrecto para `{tx_borrador_pin}`: el reverso quedará **PENDIENTE_APROBACION** para revisión del admin.")
+                st.warning("PIN de autorización incorrecto: el reverso quedará **PENDIENTE_APROBACION** para revisión del admin.")
             elif pin_valido_cust:
-                st.success(f"PIN válido para `{tx_borrador_pin}`: reverso autorizado y aplicado al consolidado.")
+                st.success("PIN de autorización válido: reverso aprobado y aplicado al consolidado.")
             else:
-                st.info(f"Sin PIN ingresado para `{tx_borrador_pin}`: el reverso queda **PENDIENTE_APROBACION** en la bandeja del administrador.")
+                st.info("Sin PIN ingresado: el reverso queda **PENDIENTE_APROBACION** en la bandeja del administrador.")
         else:
-            st.caption(f"PIN único para esta transacción (`{tx_borrador_pin}`): **`{pin_tx_esperado}`**")
-    else:
-        st.session_state["tx_reverso_draft"] = ""
+            st.caption(f"PIN de autorización activo para reversos: **`{pin_autorizacion_act}`**")
 
     c6.write("")
     c6.write("")
@@ -2258,21 +2279,14 @@ with tab_op:
                 and es_computable_en_consolidado(r)
             )
             now = datetime.now()
-            tx_id_nuevo = st.session_state.get("tx_reverso_draft") or f"TX-{now.strftime('%Y%m%d%H%M%S')}"
-            pin_tx_actual = generar_pin_transaccion(
-                st.session_state["pin_reverso_act"],
-                tx_id=tx_id_nuevo,
-                bod=bod_norm,
-                cod_sku=cod_sku,
-                q_val=q_reg,
-            )
+            tx_id_nuevo = f"TX-{now.strftime('%Y%m%d%H%M%S')}"
             motivo_final = motivo
             if q_reg < 0:
                 if es_admin:
                     est_rev_ini = "APROBADO"
                 elif pin_valido_cust:
                     est_rev_ini = "APROBADO"
-                    motivo_final = f"{motivo} [PIN_TX_{pin_tx_actual}_AUTORIZADO]".strip()
+                    motivo_final = f"{motivo} [PIN_{pin_autorizacion_act}_AUTORIZADO]".strip()
                 else:
                     est_rev_ini = "PENDIENTE_APROBACION"
             else:
@@ -2320,7 +2334,6 @@ with tab_op:
                 st.session_state["cap_v"] += 1
                 st.session_state["sku_pend_scan"] = ""
                 st.session_state["scan_confirmado_cant"] = False
-                st.session_state["tx_reverso_draft"] = ""
                 if est_rev_ini == "PENDIENTE_APROBACION":
                     st.session_state["ultimo_tx_resumen"] = (
                         f"<b>Último registro guardado:</b> <code>{html.escape(tx_id_nuevo)}</code> | "
@@ -2368,18 +2381,7 @@ if tab_dash is not None:
             )
             lista_tx_pend = [norm_mayus_limpio(x) for x in pend_rev_df["ID_Tx"].tolist() if norm_mayus_limpio(x)]
             sel_tx_rev = st.selectbox("Seleccionar reverso pendiente:", lista_tx_pend, key="sel_tx_rev_admin")
-            reg_sel_rev = next(
-                (r for r in pend_rev_df.to_dict(orient="records") if norm_mayus_limpio(r.get("ID_Tx", "")) == sel_tx_rev),
-                None,
-            )
-            pin_tx_sel = generar_pin_transaccion(
-                st.session_state["pin_reverso_act"],
-                tx_id=sel_tx_rev,
-                bod=reg_sel_rev.get("Bodega", "") if reg_sel_rev else "",
-                cod_sku=reg_sel_rev.get("COD_SKU", "") if reg_sel_rev else "",
-                q_val=reg_sel_rev.get("Q", 0) if reg_sel_rev else 0,
-            )
-            st.caption(f"PIN único para `{sel_tx_rev}`: **`{pin_tx_sel}`** (PIN base: `{st.session_state['pin_reverso_act']}`)")
+            st.caption(f"PIN de autorización activo: **`{normalizar_pin_4d(st.session_state.get('pin_reverso_act', '7031'))}`**")
             r_col1, r_col2 = st.columns(2)
             if r_col1.button("Aprobar Reverso", use_container_width=True, key="btn_aprobar_rev"):
                 ok_r, reg_mod = resolver_reverso_pendiente(sel_tx_rev, aprobar=True, admin_usr=usuario)
